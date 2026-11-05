@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { HostCancelButton } from "@/components/HostCancelButton";
 import { EventTypeManager } from "@/components/EventTypeManager";
+import { HostProfileForm } from "@/components/HostProfileForm";
 import { SESSION_COOKIE_NAME, verifySessionToken } from "@/lib/auth";
 import db from "@/lib/db";
 
@@ -22,8 +23,8 @@ export default async function DashboardPage() {
     include: {
       eventTypes: {
         include: {
-        _count: { select: { bookings: true } },
-        bookings: {
+          _count: { select: { bookings: true } },
+          bookings: {
             where: {
               startUtc: { gte: now },
               OR: [
@@ -126,10 +127,8 @@ export default async function DashboardPage() {
 
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="text-xl font-semibold">Profile</h2>
-            <div className="mt-4 space-y-3 text-sm text-slate-700">
-              <div className="rounded-2xl bg-slate-50 p-3">Host: {host.name}</div>
-              <div className="rounded-2xl bg-slate-50 p-3">Email: {host.email}</div>
-              <div className="rounded-2xl bg-slate-50 p-3">Timezone: {host.timezone}</div>
+            <div className="mt-4">
+              <HostProfileForm name={host.name} timezone={host.timezone} email={host.email} />
             </div>
           </div>
         </section>

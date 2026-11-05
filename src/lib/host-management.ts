@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { IANAZone } from "luxon";
 import { z } from "zod";
 import db from "@/lib/db";
 
@@ -15,6 +16,11 @@ const eventTypeFields = {
 
 export const eventTypeInputSchema = z.object(eventTypeFields).strict();
 export type EventTypeInput = z.infer<typeof eventTypeInputSchema>;
+export const hostProfileInputSchema = z.object({
+  name: z.string().trim().min(2).max(100),
+  timezone: z.string().trim().refine(IANAZone.isValidZone, "Enter a valid IANA time zone."),
+}).strict();
+export type HostProfileInput = z.infer<typeof hostProfileInputSchema>;
 
 export class HostManagementError extends Error {
   constructor(
@@ -28,6 +34,25 @@ export class HostManagementError extends Error {
 
 function isUniqueConstraintError(error: unknown) {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+}
+
+function isRecordNotFoundError(error: unknown) {
+  return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2025";
+}
+
+export async function updateHostProfile(hostId: string, input: HostProfileInput) {
+  try {
+    return await db.host.update({
+      where: { id: hostId },
+      data: input,
+      select: { id: true, name: true, timezone: true },
+    });
+  } catch (error) {
+    if (isRecordNotFoundError(error)) {
+      throw new HostManagementError("Host profile not found.", 404);
+    }
+    throw error;
+  }
 }
 
 export async function listHostEventTypes(hostId: string) {

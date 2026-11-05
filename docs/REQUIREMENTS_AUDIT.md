@@ -24,7 +24,7 @@ The workspace and supplied 663-line `Pasted text #1.txt` assignment snapshot wer
 | Host password hashing | **Implemented but not verified** | bcrypt helpers and seed in `src/lib/auth.ts` and `src/lib/seed.ts`; login requires DB and was not exercised. |
 | Host session protection | **Implemented and verified** | Signed, expiring host session helpers in `src/lib/auth.ts`; `tests/unit/auth.spec.ts` verifies valid, expired, and tampered tokens. Dashboard checks the signed cookie in `src/app/dashboard/page.tsx`; DB-backed login flow remains unverified. |
 | Seeded demo host login | **Implemented but not verified** | `src/lib/seed.ts`, login route, and `src/components/LoginForm.tsx`; seed and login were not run against PostgreSQL. |
-| Host profile editing and IANA timezone configuration | **Partially implemented** | Host name/timezone are stored and the seeded timezone is valid (`prisma/schema.prisma`, `src/lib/seed.ts`); no profile-edit endpoint or UI exists. |
+| Host profile editing and IANA timezone configuration | **Implemented and verified** | Authenticated `PATCH /api/host/profile` validates name and IANA zone with `hostProfileInputSchema` in `src/lib/host-management.ts`; `src/components/HostProfileForm.tsx` updates the dashboard. Unit validation and PostgreSQL persistence are covered in `tests/unit/host-management.spec.ts` and `tests/integration/host-profile.spec.ts`. |
 | Event type create/edit/manage and server validation | **Implemented and verified** | Authenticated API in `src/app/api/host/event-types/route.ts` and `[id]/route.ts`; dashboard editor in `src/components/EventTypeManager.tsx`; PostgreSQL CRUD, ownership, and safe-delete integration cases in `tests/integration/host-event-management.spec.ts`. Deletion is rejected if any booking history exists, including cancelled bookings. |
 | Event duration, capacity, buffers, notice, and horizon constraints | **Implemented and verified** | Zod limits in `src/lib/host-management.ts`, browser controls in `src/components/EventTypeManager.tsx`, unit validation in `tests/unit/host-management.spec.ts`, PostgreSQL persistence test in `tests/integration/host-event-management.spec.ts`; duration uses 15-minute increments, capacity 1–100, buffers 0–30 minutes, notice 0–43,200 minutes, and horizon 1–365 days. |
 | Weekly availability with multiple local-time windows per weekday | **Partially implemented** | `AvailabilityRule` model and generator support multiple windows; the unit suite exercises a rule, but not multiple windows; `src/lib/seed.ts` inserts one sample rule per event and no host availability editor/API exists. |
@@ -53,7 +53,7 @@ The workspace and supplied 663-line `Pasted text #1.txt` assignment snapshot wer
 | Required slots, holds, confirmation, reschedule, and cancellation endpoints | **Implemented but not verified** | Routes exist under `src/app/api`; business services are integration-tested against PostgreSQL, but HTTP handlers and route authentication are not tested end-to-end. |
 | Authentication, event creation, availability, and booking tests | **Partially implemented** | Unit tests cover session helpers, booking scheduling, and event type input validation; real PostgreSQL tests cover event CRUD and booking flows. Profile/availability CRUD is not implemented yet, and browser/login flows are not covered. |
 | Playwright tests for important guest flows | **Missing** | No Playwright dependency, configuration, or browser flow tests exist. |
-| Required real-PostgreSQL concurrency tests | **Implemented and verified** | Seven cases in `tests/integration/booking-concurrency.spec.ts` cover capacity-one, group limits, rescheduling, idempotency, expiry, confirmation, and cancellation. All seven passed against PostgreSQL 18; four additional event-management integration tests also passed. |
+| Required real-PostgreSQL concurrency tests | **Implemented and verified** | Seven cases in `tests/integration/booking-concurrency.spec.ts` cover capacity-one, group limits, rescheduling, idempotency, expiry, confirmation, and cancellation. All seven passed against PostgreSQL 18; five additional host-management integration tests also passed. |
 | Docker Compose starts PostgreSQL, migrates, seeds, and starts app | **Implemented but not verified** | `docker-compose.yml` includes a PostgreSQL health check and migration/seed/start command; Docker Desktop's Linux engine was unavailable, so startup was not tested. |
 | README setup, API, tests, tour, architecture and technical report | **Partially implemented** | `README.md`, `docs/ARCHITECTURE.md`, and `docs/SUBMISSION_REPORT.md` document current setup and gaps; no deployment/GitHub links or unrun test results are invented. The submission report is a Markdown draft, not a converted PDF. |
 | AI usage log | **Implemented but not verified** | `AI_LOG.md` records assistance and corrections from this session; it is a document rather than runtime behavior. |
@@ -70,8 +70,8 @@ The workspace and supplied 663-line `Pasted text #1.txt` assignment snapshot wer
 
 ## Commands actually executed
 
-- `npm test` — passed 16 unit tests; 11 PostgreSQL integration tests were skipped by the default command.
-- `npm run test:integration` — passed 11 tests against PostgreSQL 18.
+- `npm test` — passed 20 unit tests; 12 PostgreSQL integration tests were skipped by the default command.
+- `npm run test:integration` — passed 12 tests against PostgreSQL 18.
 - `npm run lint` — passed with no warnings.
 - `npm run build` — passed after correcting a TypeScript issue in the new integration test.
 - `npx prisma validate` — passed.

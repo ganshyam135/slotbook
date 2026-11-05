@@ -76,6 +76,7 @@ Compose waits for PostgreSQL health, runs `prisma migrate deploy`, seeds repeata
 - `POST /api/host/event-types` — create an event type
 - `PATCH /api/host/event-types/{id}` — update an event type
 - `DELETE /api/host/event-types/{id}` — delete only if the event has no booking history
+- `PATCH /api/host/profile` — update the authenticated host name and IANA home time zone
 
 The notification table is a database sink; no real email is sent.
 
@@ -105,7 +106,7 @@ Open `/login` and sign in with the demo account. The dashboard lists seeded even
 
 ## Known gaps
 
-- Host event type management is available in the dashboard. Weekly availability, date overrides, and host timezone/profile editing are still pending.
+- Host event type and profile management are available in the dashboard. Weekly availability and date override management are still pending.
 - PostgreSQL 18 is configured locally on port 5433. Docker Desktop's Linux engine is unavailable in this environment, so local PostgreSQL is used for database-backed verification.
 - There are no Playwright end-to-end tests, and email delivery is intentionally not implemented.
 
