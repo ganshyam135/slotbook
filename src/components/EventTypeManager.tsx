@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { DateOverrideEditor } from "@/components/DateOverrideEditor";
+import { WeeklyAvailabilityEditor } from "@/components/WeeklyAvailabilityEditor";
 
 interface ManagedEventType {
   id: string;
@@ -13,9 +15,27 @@ interface ManagedEventType {
   minNoticeMinutes: number;
   bookingHorizonDays: number;
   _count: { bookings: number };
+  availabilityRules: Array<{ dayOfWeek: number; startMinute: number; endMinute: number }>;
+  availabilityOverrides: Array<{
+    id: string;
+    localDate: Date | string;
+    isUnavailable: boolean;
+    startMinute: number | null;
+    endMinute: number | null;
+  }>;
 }
 
-type EventFormValues = Omit<ManagedEventType, "id" | "_count">;
+type EventFormValues = Pick<
+  ManagedEventType,
+  | "name"
+  | "slug"
+  | "durationMinutes"
+  | "capacity"
+  | "bufferBeforeMinutes"
+  | "bufferAfterMinutes"
+  | "minNoticeMinutes"
+  | "bookingHorizonDays"
+>;
 
 const emptyValues: EventFormValues = {
   name: "",
@@ -54,10 +74,17 @@ export function EventTypeManager({
   }
 
   function startEdit(eventType: ManagedEventType) {
-    const { id, _count, ...formValues } = eventType;
-    void _count;
-    setEditingId(id);
-    setValues(formValues);
+    setEditingId(eventType.id);
+    setValues({
+      name: eventType.name,
+      slug: eventType.slug,
+      durationMinutes: eventType.durationMinutes,
+      capacity: eventType.capacity,
+      bufferBeforeMinutes: eventType.bufferBeforeMinutes,
+      bufferAfterMinutes: eventType.bufferAfterMinutes,
+      minNoticeMinutes: eventType.minNoticeMinutes,
+      bookingHorizonDays: eventType.bookingHorizonDays,
+    });
     setMessage(null);
     setFormOpen(true);
   }
@@ -203,6 +230,19 @@ export function EventTypeManager({
                   </button>
                 </div>
               </div>
+              <details className="mt-4 border-t border-slate-200 pt-2">
+                <summary className="cursor-pointer text-sm font-medium text-indigo-700">
+                  Availability and date overrides
+                </summary>
+                <WeeklyAvailabilityEditor
+                  eventTypeId={eventType.id}
+                  initialWindows={eventType.availabilityRules}
+                />
+                <DateOverrideEditor
+                  eventTypeId={eventType.id}
+                  initialOverrides={eventType.availabilityOverrides}
+                />
+              </details>
             </article>
           ))
         )}

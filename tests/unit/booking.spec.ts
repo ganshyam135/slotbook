@@ -55,6 +55,21 @@ describe("booking availability", () => {
     expect(slots[0].start).toBe("2026-03-09T10:00:00.000Z");
   });
 
+  it("makes an unavailable date override suppress weekly availability", () => {
+    const slots = buildSlotRange({
+      eventType: { ...eventType, durationMinutes: 30 },
+      hostTimezone: "UTC",
+      from: "2026-03-09T00:00:00.000Z",
+      to: "2026-03-10T00:00:00.000Z",
+      rules: [{ dayOfWeek: 1, startMinute: 540, endMinute: 1020 }],
+      overrides: [{ localDate: "2026-03-09", isUnavailable: true }],
+      bookings: [],
+      now: new Date("2026-03-01T00:00:00.000Z"),
+    });
+
+    expect(slots).toHaveLength(0);
+  });
+
   it("skips nonexistent and ambiguous local wall times at daylight-saving transitions", () => {
     const springSlots = buildSlotRange({
       eventType: { ...eventType, durationMinutes: 15 },

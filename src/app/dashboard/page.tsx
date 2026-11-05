@@ -35,6 +35,8 @@ export default async function DashboardPage() {
             orderBy: { startUtc: "asc" },
             take: 10,
           },
+          availabilityRules: { orderBy: [{ dayOfWeek: "asc" }, { startMinute: "asc" }] },
+          availabilityOverrides: { orderBy: { localDate: "asc" } },
         },
       },
     },
