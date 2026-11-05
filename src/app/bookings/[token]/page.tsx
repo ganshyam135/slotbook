@@ -27,6 +27,11 @@ export default async function BookingManagementPage({
   }
 
   const holdExpired = booking.status === "held" && (!booking.expiresAt || booking.expiresAt <= new Date());
+  const dateFormatter = new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+    timeZone: booking.eventType.host.timezone,
+  });
 
   return (
     <main className="min-h-screen bg-slate-100 px-4 py-12">
@@ -37,14 +42,20 @@ export default async function BookingManagementPage({
           <div className="rounded-2xl bg-slate-50 p-4">Status: {holdExpired ? "expired" : booking.status}</div>
           <div className="rounded-2xl bg-slate-50 p-4">Guest: {booking.guestName ?? "Guest"}</div>
           <div className="rounded-2xl bg-slate-50 p-4">Email: {booking.guestEmail ?? "Not provided"}</div>
-          <div className="rounded-2xl bg-slate-50 p-4">Starts: {new Date(booking.startUtc).toLocaleString()}</div>
-          <div className="rounded-2xl bg-slate-50 p-4">Ends: {new Date(booking.endUtc).toLocaleString()}</div>
+          <div className="rounded-2xl bg-slate-50 p-4">
+            Starts ({booking.eventType.host.timezone}): {dateFormatter.format(booking.startUtc)}
+          </div>
+          <div className="rounded-2xl bg-slate-50 p-4">
+            Ends ({booking.eventType.host.timezone}): {dateFormatter.format(booking.endUtc)}
+          </div>
         </div>
         <BookingManagementActions
           bookingId={booking.id}
           token={token}
           status={holdExpired ? "expired" : booking.status}
           holdExpired={holdExpired}
+          guestName={booking.guestName}
+          guestEmail={booking.guestEmail}
         />
       </div>
     </main>

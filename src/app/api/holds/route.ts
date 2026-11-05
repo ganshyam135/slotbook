@@ -1,20 +1,11 @@
 import crypto from "node:crypto";
-import { IANAZone } from "luxon";
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import { BookingError, createHold } from "@/lib/booking-service";
-
-const holdSchema = z.object({
-  eventTypeId: z.string().min(1),
-  start: z.iso.datetime(),
-  timezone: z.string().refine(IANAZone.isValidZone, "Invalid IANA timezone."),
-  guestName: z.string().trim().min(2).max(120),
-  guestEmail: z.email().max(254),
-});
+import { createHoldRequestSchema } from "@/lib/booking-validation";
 
 export async function POST(request: Request) {
   const rawBody = await request.json().catch(() => null);
-  const parsed = holdSchema.safeParse(rawBody);
+  const parsed = createHoldRequestSchema.safeParse(rawBody);
 
   if (!parsed.success) {
     return NextResponse.json({ message: "Invalid hold request.", issues: parsed.error.issues }, { status: 400 });

@@ -67,8 +67,8 @@ Compose waits for PostgreSQL health, runs `prisma migrate deploy`, seeds repeata
 ## REST API
 
 - `GET /api/hosts/{host}/events/{slug}/slots?from=&to=&tz=` — available UTC instants with guest-local date/time labels
-- `POST /api/holds` — accepts `{ eventTypeId, start, timezone, guestName, guestEmail }`; supports `Idempotency-Key`. Reusing a key with a different request returns `409`.
-- `POST /api/holds/{id}/confirm` — confirms an unexpired hold
+- `POST /api/holds` — accepts `{ eventTypeId, start, timezone }` to create a five-minute hold; guest details may also be supplied. Supports `Idempotency-Key`; reusing a key with a different request returns `409`.
+- `POST /api/holds/{id}/confirm` — confirms an unexpired hold and accepts `{ guestName, guestEmail }` when they were not supplied at hold creation
 - `POST /api/bookings/{token}/reschedule` — accepts `{ newStart }`
 - `POST /api/bookings/{token}/cancel` — accepts an optional `{ reason }`
 - `POST /api/host/bookings/{id}/cancel` — host-only cancellation with a required reason
@@ -109,7 +109,7 @@ Open `/login` and sign in with the demo account. The dashboard lists seeded even
 
 ## Known gaps
 
-- Host event type, profile, weekly availability, and date override management are available in the dashboard. Browser-level end-to-end testing is still pending.
+- Host event type, profile, weekly availability, and date override management are available in the dashboard. The guest hold, confirmation, management-link, and cancellation flow has been manually smoke-tested in a browser against PostgreSQL; automated browser end-to-end tests are not configured.
 - PostgreSQL 18 is configured locally on port 5433. Docker Desktop's Linux engine is unavailable in this environment, so local PostgreSQL is used for database-backed verification.
 - There are no Playwright end-to-end tests, and email delivery is intentionally not implemented.
 

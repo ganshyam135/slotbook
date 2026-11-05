@@ -183,8 +183,8 @@ export async function createHold({
 }: {
   eventTypeId: string;
   start: Date;
-  guestName: string;
-  guestEmail: string;
+  guestName?: string;
+  guestEmail?: string;
   idempotencyKey?: string;
   requestHash: string;
 }) {
@@ -227,8 +227,8 @@ export async function createHold({
         status: "held",
         startUtc: start,
         endUtc: end,
-        guestName,
-        guestEmail,
+        guestName: guestName ?? null,
+        guestEmail: guestEmail ?? null,
         managementTokenHash: hashManagementToken(managementToken),
         expiresAt: holdExpiresAt,
       },
@@ -248,8 +248,8 @@ export async function createHold({
         bookingId: booking.id,
         type: "booking_held",
         payload: {
-          guestName,
-          guestEmail,
+          guestName: guestName ?? null,
+          guestEmail: guestEmail ?? null,
           startUtc: start.toISOString(),
           endUtc: end.toISOString(),
         },
@@ -281,7 +281,10 @@ export async function createHold({
   };
 }
 
-export async function confirmHold(bookingId: string) {
+export async function confirmHold(
+  bookingId: string,
+  guestDetails?: { guestName: string; guestEmail: string },
+) {
   const result = await db.$transaction(async (tx) => {
     const booking = await lockBooking(tx, bookingId);
     if (!booking) throw new BookingError("Hold not found.", 404);
@@ -298,9 +301,15 @@ export async function confirmHold(bookingId: string) {
       return { expired: true as const };
     }
 
+    const guestName = guestDetails?.guestName ?? booking.guestName;
+    const guestEmail = guestDetails?.guestEmail ?? booking.guestEmail;
+    if (!guestName || !guestEmail) {
+      throw new BookingError("Guest name and email are required before confirmation.", 400);
+    }
+
     const updated = await tx.booking.update({
       where: { id: booking.id },
-      data: { status: "confirmed", expiresAt: null },
+      data: { status: "confirmed", expiresAt: null, guestName, guestEmail },
     });
     await tx.notification.create({
       data: {
@@ -448,7 +457,7 @@ export async function cancelBookingForHost(bookingId: string, hostId: string, re
 export async function getBookingByToken(token: string) {
   return db.booking.findUnique({
     where: { managementTokenHash: hashManagementToken(token) },
-    include: { eventType: true },
+    include: { eventType: { include: { host: { select: { timezone: true } } } } },
   });
 }
 

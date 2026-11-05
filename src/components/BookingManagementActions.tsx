@@ -8,12 +8,23 @@ interface BookingManagementActionsProps {
   token: string;
   status: string;
   holdExpired: boolean;
+  guestName: string | null;
+  guestEmail: string | null;
 }
 
-export function BookingManagementActions({ bookingId, token, status, holdExpired }: BookingManagementActionsProps) {
+export function BookingManagementActions({
+  bookingId,
+  token,
+  status,
+  holdExpired,
+  guestName: initialGuestName,
+  guestEmail: initialGuestEmail,
+}: BookingManagementActionsProps) {
   const router = useRouter();
   const [newStart, setNewStart] = useState("");
   const [reason, setReason] = useState("");
+  const [guestName, setGuestName] = useState(initialGuestName ?? "");
+  const [guestEmail, setGuestEmail] = useState(initialGuestEmail ?? "");
   const [message, setMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -39,22 +50,51 @@ export function BookingManagementActions({ bookingId, token, status, holdExpired
 
   if (status === "held") {
     return (
-      <div className="mt-6 space-y-3">
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          void submit(`/api/holds/${encodeURIComponent(bookingId)}/confirm`, { guestName, guestEmail });
+        }}
+        className="mt-6 space-y-3"
+      >
         <p className="text-sm text-slate-600">
           {holdExpired ? "This hold has expired." : "This time is held for up to five minutes."}
         </p>
         {!holdExpired ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void submit(`/api/holds/${encodeURIComponent(bookingId)}/confirm`, {})}
-            className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            {busy ? "Confirming..." : "Confirm booking"}
-          </button>
+          <>
+            <label className="block text-sm font-medium text-slate-700">
+              Full name
+              <input
+                value={guestName}
+                onChange={(event) => setGuestName(event.target.value)}
+                required
+                minLength={2}
+                maxLength={120}
+                className="mt-2 block w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5"
+              />
+            </label>
+            <label className="block text-sm font-medium text-slate-700">
+              Email address
+              <input
+                type="email"
+                value={guestEmail}
+                onChange={(event) => setGuestEmail(event.target.value)}
+                required
+                maxLength={254}
+                className="mt-2 block w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5"
+              />
+            </label>
+            <button
+              type="submit"
+              disabled={busy}
+              className="rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
+            >
+              {busy ? "Confirming..." : "Confirm booking"}
+            </button>
+          </>
         ) : null}
         {message ? <p role="status" className="text-sm text-slate-600">{message}</p> : null}
-      </div>
+      </form>
     );
   }
 
@@ -79,7 +119,7 @@ export function BookingManagementActions({ bookingId, token, status, holdExpired
         className="space-y-3"
       >
         <label className="block text-sm font-medium text-slate-700">
-          Reschedule to
+          Reschedule to (your device&apos;s local time)
           <input
             type="datetime-local"
             value={newStart}

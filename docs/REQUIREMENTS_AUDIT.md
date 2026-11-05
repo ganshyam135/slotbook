@@ -35,30 +35,30 @@ The workspace and supplied 663-line `Pasted text #1.txt` assignment snapshot wer
 | Public `/{host}/{event-slug}` page and event information | **Implemented but not verified** | `src/app/[host]/[eventSlug]/page.tsx`; production build passed, but DB-backed rendering was not tested. |
 | Browse next 30 days and view/switch guest timezone | **Implemented but not verified** | `src/components/BookingFlow.tsx` and slots API provide a 30-day range and guest-local labels; no browser test verified the interaction. |
 | Available, held, and unavailable slot states clearly distinguished | **Partially implemented** | Available slots and empty-date state are displayed; the UI does not render a separate held-state calendar indicator. Holds are rejected by the server capacity check. |
-| Guest hold, name/email collection, confirmation, and private management link | **Implemented but not verified** | Guest UI and hold/confirm endpoints in `src/components/BookingFlow.tsx`, `src/app/api/holds/route.ts`, and `src/app/api/holds/[id]/confirm/route.ts`; requires database to verify. |
-| Management page, guest reschedule and cancellation | **Implemented but not verified** | `src/app/bookings/[token]/page.tsx`, `src/components/BookingManagementActions.tsx`, and token APIs; end-to-end DB behavior was not verified. |
+| Guest hold, name/email collection, confirmation, and private management link | **Implemented and verified** | `src/components/BookingFlow.tsx`, `src/app/api/holds/route.ts`, and `src/app/api/holds/[id]/confirm/route.ts`; a browser smoke test against PostgreSQL completed a five-minute hold, guest details entry, confirmation, and private-link display. The integration suite also verifies guest details supplied at confirmation. |
+| Management page, guest reschedule and cancellation | **Implemented and verified** | `src/app/bookings/[token]/page.tsx`, `src/components/BookingManagementActions.tsx`, and token APIs; the browser smoke test opened the private management page and cancelled the confirmed booking. Real-PostgreSQL integration tests cover cancellation and rescheduling behavior. |
 | Hold duration is five minutes using server/database time | **Implemented and verified** | `src/lib/booking-service.ts` sets expiry using PostgreSQL `clock_timestamp() + INTERVAL '5 minutes'`; the PostgreSQL integration case verifies the stored remaining duration. |
 | Expired holds do not consume capacity without cleanup | **Implemented and verified** | Availability and transaction reads filter holds against database time; the PostgreSQL integration case expires a hold, rejects confirmation, and verifies a replacement can reserve the slot. There is no background status-cleanup worker. |
 | Confirmation fails after expiry and repeated confirmation is consistent | **Implemented and verified** | `confirmHold` locks/checks the row and persists expiry; PostgreSQL integration tests verify late confirmation and concurrent confirmation behavior. |
 | Cancellation releases capacity and notification is recorded | **Implemented and verified** | Cancellation updates status and writes `Notification` transactionally; PostgreSQL integration tests verify capacity release and the confirmation notification. |
 | Reschedule reserves/checks new capacity before releasing old slot; failure preserves booking | **Implemented and verified** | `rescheduleBooking` checks and updates within PostgreSQL transactions; integration tests verify concurrent competing moves and that a failed move leaves the prior booking unchanged. |
-| Group capacity is honored | **Implemented but not verified** | `getConflictCount` counts one seat per overlapping booking; unit test covers capacity count and integration suite covers concurrent limited group bookings. |
+| Group capacity is honored | **Implemented and verified** | `getConflictCount` counts one seat per overlapping booking; unit tests cover capacity count and real-PostgreSQL integration tests verify concurrent limited group bookings without exceeding capacity. |
 | Overlap detection includes duration and buffers | **Implemented and verified** | `src/lib/booking.ts` applies intervals and both configured buffers; `tests/unit/booking.spec.ts` covers overlap and buffer behavior. |
 | PostgreSQL prevents capacity races without in-memory locks | **Implemented and verified** | `src/lib/booking-service.ts` locks event rows for holds/rescheduling; real PostgreSQL integration tests verify capacity-one and limited group capacity under concurrent requests. |
 | Idempotency persists results atomically and detects conflicting key reuse | **Implemented and verified** | `createHold` inserts/locks `IdempotencyKey` and stores the result in one transaction; PostgreSQL integration tests verify concurrent retries and reject conflicting reuse. |
 | Booking timestamps are UTC instants; availability remains host-local | **Implemented but not verified** | `TIMESTAMPTZ` and `DATE` in `prisma/schema.prisma`; local-time generation in `src/lib/booking.ts`. The database integration tests use UTC instants but do not independently verify every timezone conversion at the DB boundary. |
-| Guest display timezone and IANA validation | **Implemented but not verified** | Query and hold APIs validate IANA timezones and the slots route returns guest-local labels; no API/browser test was run. |
+| Guest display timezone and IANA validation | **Implemented and verified** | Query and hold APIs validate IANA timezones and the slots route returns guest-local labels; the browser smoke test selected a date/time in the guest timezone and the management page displayed host-local booking times. |
 | DST gaps and folds are handled explicitly | **Implemented and verified** | `src/lib/booking.ts` skips nonexistent and ambiguous local starts; spring-forward and fall-back cases are tested in `tests/unit/booking.spec.ts`. |
 | Confirmation, reschedule, and cancellation notification events | **Implemented but not verified** | `src/lib/booking-service.ts` writes `Notification` records in state-transition transactions; confirmation is queried in integration tests, but all notification types are not independently checked. |
 | Required slots, holds, confirmation, reschedule, and cancellation endpoints | **Implemented but not verified** | Routes exist under `src/app/api`; business services are integration-tested against PostgreSQL, but HTTP handlers and route authentication are not tested end-to-end. |
-| Authentication, event creation, availability, and booking tests | **Partially implemented** | Unit tests cover session helpers, booking scheduling, and event type input validation; real PostgreSQL tests cover event CRUD and booking flows. Profile/availability CRUD is not implemented yet, and browser/login flows are not covered. |
+| Authentication, event creation, availability, and booking tests | **Partially implemented** | Unit tests cover session helpers, booking scheduling, and input validation; real PostgreSQL tests cover host profile, event CRUD, availability/overrides, and booking lifecycle/concurrency. A browser smoke test covers the guest booking and cancellation journey. Authenticated host-management and full host-dashboard browser flows are not covered by automated end-to-end tests. |
 | Playwright tests for important guest flows | **Missing** | No Playwright dependency, configuration, or browser flow tests exist. |
-| Required real-PostgreSQL concurrency tests | **Implemented and verified** | Seven cases in `tests/integration/booking-concurrency.spec.ts` cover capacity-one, group limits, rescheduling, idempotency, expiry, confirmation, and cancellation. All seven passed against PostgreSQL 18; eight additional host-management integration tests also passed. |
+| Required real-PostgreSQL concurrency tests | **Implemented and verified** | Eight cases in `tests/integration/booking-concurrency.spec.ts` cover capacity-one, group limits, rescheduling, idempotency, expiry, confirmation (including guest details supplied at confirmation), and cancellation. All eight passed against PostgreSQL 18; eight host-management integration tests also passed. |
 | Docker Compose starts PostgreSQL, migrates, seeds, and starts app | **Implemented but not verified** | `docker-compose.yml` includes a PostgreSQL health check and migration/seed/start command; Docker Desktop's Linux engine was unavailable, so startup was not tested. |
 | README setup, API, tests, tour, architecture and technical report | **Partially implemented** | `README.md`, `docs/ARCHITECTURE.md`, and `docs/SUBMISSION_REPORT.md` document current setup and gaps; no deployment/GitHub links or unrun test results are invented. The submission report is a Markdown draft, not a converted PDF. |
 | AI usage log | **Implemented but not verified** | `AI_LOG.md` records assistance and corrections from this session; it is a document rather than runtime behavior. |
 | Optional observability, abuse protection, load tests, deployment | **Missing** | No optional extensions were implemented, as requested. |
-| Git milestone history | **Implemented and verified** | The repository had no commits before this audit; the local audit/fix commit establishes its first commit. No remote is created. |
+| Git milestone history | **Implemented and verified** | Local commits record the initial audit and the event-management, host-profile, and availability/override milestones. The guest booking milestone is being committed after final verification; no push is performed. |
 
 ## Database verification results
 
@@ -66,13 +66,14 @@ The workspace and supplied 663-line `Pasted text #1.txt` assignment snapshot wer
 - Local PostgreSQL: the application connects to PostgreSQL 18.2 on `localhost:5433` as `slotbook_app` to database `slotbook`. Port 5432 serves a separate PostgreSQL 17 instance.
 - Prisma: schema validation passed, the existing migration was applied with `prisma migrate deploy` without a reset, and `prisma migrate status` reports the schema up to date.
 - Seed: `npm run seed` completed; Prisma retrieved the demo host and both seeded event types.
-- Integration: 11 real-PostgreSQL tests passed: 7 booking concurrency/lifecycle tests and 4 host event-management tests.
+- Integration: all 16 real-PostgreSQL tests passed: 8 booking concurrency/lifecycle tests, 4 event-management tests, 1 profile test, and 3 availability/override tests.
 
 ## Commands actually executed
 
-- `npm test` — passed 25 unit tests; 15 PostgreSQL integration tests were skipped by the default command.
-- `npm run test:integration` — passed 15 tests against PostgreSQL 18.
-- `npm run lint` — passed with no warnings.
-- `npm run build` — passed after correcting a TypeScript issue in the new integration test.
+- `npm test` — run twice; each run passed 29 unit tests and skipped 16 PostgreSQL integration tests by design.
+- `npm run test:integration` — passed all 16 tests against PostgreSQL 18.
+- `npm run lint` — passed.
+- `npm run build` — passed, including TypeScript checking and production route generation.
+- Browser smoke test — passed against the local app and PostgreSQL: selected an available slot, created a five-minute hold, entered guest details, confirmed, opened the private management page, and cancelled the booking.
 - `npx prisma validate` — passed.
 - `prisma migrate deploy`, `prisma migrate status`, and `npm run seed` — passed against PostgreSQL 18; no database reset was used.

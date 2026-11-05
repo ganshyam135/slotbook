@@ -185,6 +185,38 @@ const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => 
     ).toBe(1);
   });
 
+  it("holds a slot before guest details and saves the details when confirmed", async () => {
+    const start = slot(16, 15);
+    const held = await createHold({
+      eventTypeId: singleEventId,
+      start,
+      requestHash: "guest-details-added-at-confirmation",
+    });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: held.id } })).toMatchObject({
+      status: "held",
+      guestName: null,
+      guestEmail: null,
+    });
+    await expect(confirmHold(held.id)).rejects.toMatchObject({ status: 400 });
+
+    await confirmHold(held.id, {
+      guestName: "Guest After Hold",
+      guestEmail: "guest-after-hold@example.test",
+    });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: held.id } })).toMatchObject({
+      status: "confirmed",
+      guestName: "Guest After Hold",
+      guestEmail: "guest-after-hold@example.test",
+    });
+    const notification = await db.notification.findFirstOrThrow({
+      where: { bookingId: held.id, type: "booking_confirmed" },
+    });
+    expect(notification.payload).toMatchObject({
+      guestName: "Guest After Hold",
+      guestEmail: "guest-after-hold@example.test",
+    });
+  });
+
   it("releases capacity after cancellation and preserves a booking when a reschedule conflicts", async () => {
     const first = await hold(singleEventId, slot(14, 9), "cancelled-guest");
     await confirmHold(first.id);

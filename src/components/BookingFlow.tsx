@@ -1,7 +1,11 @@
 "use client";
 
 import { DateTime } from "luxon";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+
+const subscribeToBrowserTimezone = () => () => {};
+const getBrowserTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+const getServerTimezone = () => "UTC";
 
 interface BookingFlowProps {
   hostSlug: string;
@@ -25,8 +29,20 @@ interface SlotResponse {
 
 interface BookingResponse {
   id?: string;
+  status?: string;
+  expiresAt?: string;
   message?: string;
   managementLink?: string;
+}
+
+interface ActiveHold {
+  id: string;
+  expiresAt: string;
+  managementLink: string;
+}
+
+interface ConfirmedBooking {
+  managementLink: string;
 }
 
 export function BookingFlow({
@@ -37,8 +53,13 @@ export function BookingFlow({
   durationMinutes,
   description,
 }: BookingFlowProps) {
-  const defaultTz = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
-  const [timezone, setTimezone] = useState(defaultTz);
+  const defaultTz = useSyncExternalStore(
+    subscribeToBrowserTimezone,
+    getBrowserTimezone,
+    getServerTimezone,
+  );
+  const [timezoneOverride, setTimezoneOverride] = useState<string | null>(null);
+  const timezone = timezoneOverride ?? defaultTz;
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [slots, setSlots] = useState<AvailableSlot[]>([]);
@@ -47,7 +68,10 @@ export function BookingFlow({
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [message, setMessage] = useState<{ success: boolean; text: string; link?: string } | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
+  const [activeHold, setActiveHold] = useState<ActiveHold | null>(null);
+  const [confirmedBooking, setConfirmedBooking] = useState<ConfirmedBooking | null>(null);
+  const [secondsRemaining, setSecondsRemaining] = useState(0);
   const idempotencyRef = useRef<{ signature: string; key: string } | null>(null);
 
   const dateOptions = useMemo(
@@ -90,6 +114,15 @@ export function BookingFlow({
     return () => controller.abort();
   }, [dateOptions, eventSlug, hostSlug, timezone]);
 
+  useEffect(() => {
+    if (!activeHold) return;
+    const updateRemaining = () => {
+      setSecondsRemaining(Math.max(0, Math.ceil((new Date(activeHold.expiresAt).getTime() - Date.now()) / 1000)));
+    };
+    const timer = window.setInterval(updateRemaining, 1000);
+    return () => window.clearInterval(timer);
+  }, [activeHold]);
+
   const filteredSlots = useMemo(
     () => (selectedDate ? slots.filter((slot) => slot.guestDay === selectedDate) : []),
     [selectedDate, slots],
@@ -98,13 +131,13 @@ export function BookingFlow({
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedSlot) {
-      setMessage({ success: false, text: "Please select an available slot first." });
+      setMessage("Please select an available slot first.");
       return;
     }
 
     setSubmitting(true);
     setMessage(null);
-    const signature = JSON.stringify({ eventId, selectedSlot, timezone, guestName, guestEmail });
+    const signature = JSON.stringify({ eventId, selectedSlot, timezone });
     if (idempotencyRef.current?.signature !== signature) {
       idempotencyRef.current = { signature, key: crypto.randomUUID() };
     }
@@ -120,43 +153,77 @@ export function BookingFlow({
           eventTypeId: eventId,
           start: selectedSlot,
           timezone,
-          guestName,
-          guestEmail,
         }),
       });
       const hold = (await holdResponse.json()) as BookingResponse;
-      if (!holdResponse.ok || !hold.id) {
+      if (
+        !holdResponse.ok ||
+        !hold.id ||
+        hold.status !== "held" ||
+        !hold.expiresAt ||
+        !hold.managementLink
+      ) {
         throw new Error(hold.message ?? "Unable to hold this time.");
       }
 
-      const confirmResponse = await fetch(`/api/holds/${hold.id}/confirm`, {
-        method: "POST",
-      });
-      const confirmation = (await confirmResponse.json()) as BookingResponse;
-      if (!confirmResponse.ok) {
-        setMessage({
-          success: false,
-          text: confirmation.message ?? "Your hold could not be confirmed. Open its management link to retry.",
-          link: hold.managementLink,
-        });
-        return;
-      }
-
-      setMessage({
-        success: true,
-        text: "Your appointment is confirmed. Save this private link to manage it.",
-        link: confirmation.managementLink,
-      });
-      setSelectedSlot(null);
+      const newHold = {
+        id: hold.id,
+        expiresAt: hold.expiresAt,
+        managementLink: hold.managementLink,
+      };
+      setActiveHold(newHold);
+      setSecondsRemaining(Math.max(0, Math.ceil((new Date(hold.expiresAt).getTime() - Date.now()) / 1000)));
     } catch (error) {
-      setMessage({
-        success: false,
-        text: error instanceof Error ? error.message : "Unable to complete this booking.",
-      });
+      setMessage(error instanceof Error ? error.message : "Unable to reserve this time.");
     } finally {
       setSubmitting(false);
     }
   }
+
+  async function handleConfirm(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeHold || secondsRemaining <= 0) {
+      setMessage("This hold has expired. Select an available time to try again.");
+      return;
+    }
+
+    setSubmitting(true);
+    setMessage(null);
+    try {
+      const confirmResponse = await fetch(`/api/holds/${activeHold.id}/confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ guestName, guestEmail }),
+      });
+      const confirmation = (await confirmResponse.json()) as BookingResponse;
+      if (!confirmResponse.ok || confirmation.status !== "confirmed" || !confirmation.managementLink) {
+        if (confirmResponse.status === 409) {
+          setActiveHold(null);
+          setSelectedSlot(null);
+        }
+        throw new Error(confirmation.message ?? "Your booking could not be confirmed.");
+      }
+
+      setConfirmedBooking({ managementLink: confirmation.managementLink });
+      setActiveHold(null);
+      setSelectedSlot(null);
+      setMessage(null);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to confirm this booking.");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function chooseAnotherTime() {
+    setActiveHold(null);
+    setSelectedSlot(null);
+    setMessage(null);
+    idempotencyRef.current = null;
+  }
+
+  const bookingLocked = Boolean(activeHold || confirmedBooking);
+  const timeRemaining = `${Math.floor(secondsRemaining / 60)}:${String(secondsRemaining % 60).padStart(2, "0")}`;
 
   return (
     <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
@@ -177,8 +244,10 @@ export function BookingFlow({
             onChange={(event) => {
               setLoading(true);
               setLoadError(null);
-              setTimezone(event.target.value);
+              setSelectedSlot(null);
+              setTimezoneOverride(event.target.value);
             }}
+            disabled={bookingLocked}
             className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800"
           >
             {!["UTC", "America/New_York", "Europe/London", "Asia/Kolkata"].includes(defaultTz) ? (
@@ -196,14 +265,20 @@ export function BookingFlow({
             <button
               key={date}
               type="button"
-              onClick={() => setSelectedDate(date)}
+              disabled={bookingLocked}
+              onClick={() => {
+                setSelectedDate(date);
+                setSelectedSlot(null);
+              }}
               className={`rounded-xl border px-3 py-2 text-sm ${
                 selectedDate === date
                   ? "border-indigo-500 bg-indigo-50 text-indigo-700"
                   : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
               }`}
             >
-              {DateTime.fromISO(`${date}T12:00`, { zone: timezone }).toLocaleString({ month: "short", day: "numeric" })}
+              {DateTime.fromISO(`${date}T12:00`, { zone: timezone })
+                .setLocale("en-US")
+                .toLocaleString({ month: "short", day: "numeric" })}
             </button>
           ))}
         </div>
@@ -224,6 +299,7 @@ export function BookingFlow({
                   <button
                     key={slot.start}
                     type="button"
+                    disabled={bookingLocked}
                     onClick={() => setSelectedSlot(slot.start)}
                     className={`rounded-xl border px-3 py-2 text-sm font-medium ${
                       isSelected
@@ -241,54 +317,111 @@ export function BookingFlow({
       </div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
-        <h3 className="text-lg font-semibold text-slate-900">Reserve your slot</h3>
+        <h3 className="text-lg font-semibold text-slate-900">
+          {confirmedBooking ? "Booking confirmed" : activeHold ? "Complete your booking" : "Reserve your slot"}
+        </h3>
         {description ? <p className="mt-3 text-sm text-slate-600">{description}</p> : null}
-        <form onSubmit={handleSubmit} className="mt-6 space-y-4">
-          <label className="block text-sm font-medium text-slate-700">
-            Full name
-            <input
-              value={guestName}
-              onChange={(event) => setGuestName(event.target.value)}
-              required
-              maxLength={120}
-              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-slate-900 outline-none focus:border-indigo-500 focus:bg-white"
-            />
-          </label>
-          <label className="block text-sm font-medium text-slate-700">
-            Email address
-            <input
-              type="email"
-              value={guestEmail}
-              onChange={(event) => setGuestEmail(event.target.value)}
-              required
-              maxLength={254}
-              className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-slate-900 outline-none focus:border-indigo-500 focus:bg-white"
-            />
-          </label>
+        <div className="mt-6 space-y-4">
           <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
             Selected slot: {selectedSlot
               ? DateTime.fromISO(selectedSlot, { zone: "utc" }).setZone(timezone).toLocaleString(DateTime.DATETIME_MED)
-              : "Choose a time"}
+              : "Choose a date and time"}
           </div>
-          <button
-            type="submit"
-            disabled={!selectedSlot || submitting}
-            className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-300"
-          >
-            {submitting ? "Confirming..." : "Confirm appointment"}
-          </button>
-        </form>
 
-        {message ? (
-          <div className={`mt-5 rounded-xl border p-3 text-sm ${message.success ? "border-emerald-200 bg-emerald-50 text-emerald-700" : "border-rose-200 bg-rose-50 text-rose-700"}`}>
-            <p>{message.text}</p>
-            {message.link ? (
-              <a href={message.link} className="mt-2 inline-block font-semibold underline">
-                Open management link
+          {!activeHold && !confirmedBooking ? (
+            <form onSubmit={handleSubmit}>
+              <button
+                type="submit"
+                disabled={!selectedSlot || submitting}
+                className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+              >
+                {submitting ? "Reserving..." : "Hold this time for 5 minutes"}
+              </button>
+            </form>
+          ) : null}
+
+          {activeHold && secondsRemaining > 0 ? (
+            <>
+              <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                This time is held for you for <strong>{timeRemaining}</strong>. Enter your details and confirm before the timer expires.
+              </p>
+              <form onSubmit={handleConfirm} className="space-y-4">
+                <label className="block text-sm font-medium text-slate-700">
+                  Full name
+                  <input
+                    value={guestName}
+                    onChange={(event) => setGuestName(event.target.value)}
+                    required
+                    minLength={2}
+                    maxLength={120}
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-slate-900 outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                </label>
+                <label className="block text-sm font-medium text-slate-700">
+                  Email address
+                  <input
+                    type="email"
+                    value={guestEmail}
+                    onChange={(event) => setGuestEmail(event.target.value)}
+                    required
+                    maxLength={254}
+                    className="mt-2 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-slate-900 outline-none focus:border-indigo-500 focus:bg-white"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-semibold text-white transition hover:bg-indigo-500 disabled:cursor-not-allowed disabled:bg-slate-300"
+                >
+                  {submitting ? "Confirming..." : "Confirm booking"}
+                </button>
+              </form>
+              <a href={activeHold.managementLink} className="inline-block text-sm font-semibold text-indigo-700 underline">
+                Save this private hold link
               </a>
-            ) : null}
-          </div>
-        ) : null}
+            </>
+          ) : null}
+
+          {activeHold && secondsRemaining <= 0 ? (
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              <p>This hold expired. It no longer reserves the time.</p>
+              <button type="button" onClick={chooseAnotherTime} className="mt-2 font-semibold underline">
+                Choose another time
+              </button>
+              <a href={activeHold.managementLink} className="ml-4 font-semibold underline">
+                View hold status
+              </a>
+            </div>
+          ) : null}
+
+          {confirmedBooking ? (
+            <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
+              <p className="font-semibold">Your appointment is confirmed.</p>
+              <p className="mt-1">The server confirmed your booking. Save this private link to reschedule or cancel.</p>
+              <a href={confirmedBooking.managementLink} className="mt-2 inline-block font-semibold underline">
+                Manage your booking
+              </a>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmedBooking(null);
+                  setGuestName("");
+                  setGuestEmail("");
+                  setMessage(null);
+                }}
+                className="mt-3 block text-indigo-700 underline"
+              >
+                Book another appointment
+              </button>
+            </div>
+          ) : null}
+
+          {message ? (
+            <p role="alert" className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+              {message}
+            </p>
+          ) : null}
+        </div>
       </div>
     </div>
   );
