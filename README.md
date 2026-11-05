@@ -72,6 +72,10 @@ Compose waits for PostgreSQL health, runs `prisma migrate deploy`, seeds repeata
 - `POST /api/bookings/{token}/reschedule` — accepts `{ newStart }`
 - `POST /api/bookings/{token}/cancel` — accepts an optional `{ reason }`
 - `POST /api/host/bookings/{id}/cancel` — host-only cancellation with a required reason
+- `GET /api/host/event-types` — list event types for the authenticated host
+- `POST /api/host/event-types` — create an event type
+- `PATCH /api/host/event-types/{id}` — update an event type
+- `DELETE /api/host/event-types/{id}` — delete only if the event has no booking history
 
 The notification table is a database sink; no real email is sent.
 
@@ -101,8 +105,8 @@ Open `/login` and sign in with the demo account. The dashboard lists seeded even
 
 ## Known gaps
 
-- There is no host UI/API yet to create or edit event types, weekly availability, date overrides, or host timezone/profile settings.
-- Database migration, seeding, runtime CRUD, and PostgreSQL concurrency behavior must still be exercised against a database with working credentials. The current development environment's PostgreSQL service rejects the sample `slotbook` credentials.
+- Host event type management is available in the dashboard. Weekly availability, date overrides, and host timezone/profile editing are still pending.
+- PostgreSQL 18 is configured locally on port 5433. Docker Desktop's Linux engine is unavailable in this environment, so local PostgreSQL is used for database-backed verification.
 - There are no Playwright end-to-end tests, and email delivery is intentionally not implemented.
 
 See [docs/REQUIREMENTS_AUDIT.md](./docs/REQUIREMENTS_AUDIT.md) for the itemized acceptance status.

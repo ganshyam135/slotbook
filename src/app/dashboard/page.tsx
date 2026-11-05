@@ -2,6 +2,7 @@ import { cookies } from "next/headers";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { HostCancelButton } from "@/components/HostCancelButton";
+import { EventTypeManager } from "@/components/EventTypeManager";
 import { SESSION_COOKIE_NAME, verifySessionToken } from "@/lib/auth";
 import db from "@/lib/db";
 
@@ -21,7 +22,8 @@ export default async function DashboardPage() {
     include: {
       eventTypes: {
         include: {
-          bookings: {
+        _count: { select: { bookings: true } },
+        bookings: {
             where: {
               startUtc: { gte: now },
               OR: [
@@ -117,20 +119,8 @@ export default async function DashboardPage() {
         <section className="mt-8 grid gap-6 lg:grid-cols-2">
           <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
             <h2 className="text-xl font-semibold">Event types</h2>
-            <div className="mt-4 space-y-3">
-              {host.eventTypes.map((event) => (
-                <div key={event.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex items-center justify-between gap-4">
-                    <div>
-                      <p className="font-medium text-slate-900">{event.name}</p>
-                      <p className="text-sm text-slate-600">/{event.slug}</p>
-                    </div>
-                    <Link href={`/${host.slug}/${event.slug}`} className="text-sm font-medium text-indigo-600">
-                      View public page
-                    </Link>
-                  </div>
-                </div>
-              ))}
+            <div className="mt-4">
+              <EventTypeManager initialEventTypes={host.eventTypes} hostSlug={host.slug} />
             </div>
           </div>
 
