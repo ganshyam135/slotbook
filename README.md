@@ -95,13 +95,22 @@ The notification table is a database sink; no real email is sent.
 ## Validation and tests
 
 ```powershell
+npm ci --legacy-peer-deps
+npx playwright install chromium
 npm run lint
 npm test
+npm run test:e2e
 npm run build
 npm run test:integration
 ```
 
 `npm test` runs deterministic unit tests and reports PostgreSQL integration tests as skipped. `npm run test:integration` enables tests that create fixtures and issue simultaneous transactions against the configured PostgreSQL database. The suite cannot pass without valid PostgreSQL credentials.
+
+`npm run test:e2e` launches the actual Next.js app on `http://127.0.0.1:3100` and runs the Chromium browser suite. Playwright downloads Chromium separately from npm dependencies; install it with `npx playwright install chromium`. Failure screenshots, traces, video, and the HTML report are written to ignored `test-results/` and `playwright-report/` folders.
+
+Playwright uses `E2E_DATABASE_URL` when present, otherwise `DATABASE_URL`, and forces Prisma to use the isolated PostgreSQL schema `slotbook_e2e`. Set the connection to a dedicated test database when available. The suite never resets, truncates, or drops a database or schema. It applies the checked-in migrations to the isolated schema, creates a uniquely named host and event fixture, and removes only that fixture host (and its dependent test records) on teardown. The schema and migration ledger are retained. The test account password is generated for each run and stored only in ignored `.playwright/fixture.json`; stale recorded fixtures are identity-checked and cleaned at the next run.
+
+For CI, configure `E2E_DATABASE_URL` as a PostgreSQL test connection and install Chromium before running `npm run test:e2e`. PostgreSQL fixtures are real and isolated; the browser tests do not mock API responses or substitute SQLite.
 
 ## 60-second UI tour
 
@@ -109,8 +118,8 @@ Open `/login` and sign in with the demo account. The dashboard lists seeded even
 
 ## Known gaps
 
-- Host event type, profile, weekly availability, and date override management are available in the dashboard. The guest hold, confirmation, management-link, and cancellation flow has been manually smoke-tested in a browser against PostgreSQL; automated browser end-to-end tests are not configured.
+- Host event type, profile, weekly availability, and date override management are available in the dashboard. Chromium E2E tests cover host authentication/management and the guest hold, confirmation, private-link, reschedule, cancellation, and capacity-release journey against PostgreSQL.
 - PostgreSQL 18 is configured locally on port 5433. Docker Desktop's Linux engine is unavailable in this environment, so local PostgreSQL is used for database-backed verification.
-- There are no Playwright end-to-end tests, and email delivery is intentionally not implemented.
+- Firefox and WebKit E2E runs are not configured; email delivery is intentionally not implemented.
 
 See [docs/REQUIREMENTS_AUDIT.md](./docs/REQUIREMENTS_AUDIT.md) for the itemized acceptance status.
