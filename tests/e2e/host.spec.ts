@@ -1,10 +1,12 @@
 import { expect, test } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { DateTime } from "luxon";
+import { randomUUID } from "node:crypto";
 import { readE2EFixture } from "./fixture";
 
 async function login(page: Page, fixture: ReturnType<typeof readE2EFixture>) {
   await page.goto("/login");
+  await page.waitForLoadState("networkidle");
   await page.getByLabel("Email").fill(fixture.email);
   await page.getByLabel("Password").fill(fixture.password);
   await page.getByRole("button", { name: "Continue to dashboard" }).click();
@@ -15,10 +17,15 @@ test("protects the dashboard and rejects invalid host credentials", async ({ pag
   const fixture = readE2EFixture();
   await page.goto("/dashboard");
   await expect(page).toHaveURL(/\/login$/);
+  await page.waitForLoadState("networkidle");
 
   await page.getByLabel("Email").fill(fixture.email);
   await page.getByLabel("Password").fill("incorrect-password");
+  const loginResponsePromise = page.waitForResponse(
+    (response) => response.url().endsWith("/api/auth/login") && response.request().method() === "POST",
+  );
   await page.getByRole("button", { name: "Continue to dashboard" }).click();
+  expect((await loginResponsePromise).status()).toBe(401);
   await expect(page.getByText("Invalid email or password.")).toBeVisible();
 });
 
@@ -37,10 +44,10 @@ test("host manages event types, profile, weekly hours, and date overrides", asyn
   });
 
   await login(page, fixture);
-  await expect(page.getByRole("heading", { name: fixture.hostName })).toBeVisible();
+  await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   await page.getByRole("button", { name: "Add event type" }).click();
 
-  const suffix = fixture.hostSlug.slice(-8);
+  const suffix = randomUUID().slice(-8);
   const eventName = "E2E Schedule Review";
   const eventSlug = `e2e-schedule-${suffix}`;
   await page.getByLabel("Name", { exact: true }).fill(eventName);

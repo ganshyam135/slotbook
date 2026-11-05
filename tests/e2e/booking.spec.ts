@@ -90,9 +90,16 @@ test("guest holds, confirms, manages, reschedules, cancels, and releases capacit
 
   await managementLink.click();
   await expect(page.getByText("Manage booking", { exact: true })).toBeVisible();
+  await page.waitForLoadState("networkidle");
   await expect(page.getByText("Status: confirmed")).toBeVisible();
-  const rescheduleValue = DateTime.fromISO(targetSlot.start, { zone: "utc" }).toFormat("yyyy-MM-dd'T'HH:mm");
-  await page.getByLabel("Reschedule to (your device's local time)").fill(rescheduleValue);
+  const rescheduleValue = await page.evaluate((start) => {
+    const target = new Date(start);
+    const localTarget = new Date(target.getTime() - target.getTimezoneOffset() * 60_000);
+    return localTarget.toISOString().slice(0, 16);
+  }, targetSlot.start);
+  const rescheduleInput = page.getByLabel("Reschedule to (your device's local time)");
+  await rescheduleInput.fill(rescheduleValue);
+  await expect(rescheduleInput).toHaveValue(rescheduleValue);
   await page.getByRole("button", { name: "Reschedule" }).click();
   await expect(page.getByRole("status")).toContainText("Booking rescheduled successfully.");
 
