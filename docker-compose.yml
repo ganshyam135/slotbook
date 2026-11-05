@@ -1,0 +1,40 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: slotbook-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: slotbook
+      POSTGRES_USER: slotbook
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slotbook -d slotbook"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: slotbook-app
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://slotbook:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/slotbook?schema=public
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
+      HOST_EMAIL: ${HOST_EMAIL:-demo@slotbook.app}
+      HOST_PASSWORD: ${HOST_PASSWORD:?Set HOST_PASSWORD in .env}
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: sh -c "npx prisma migrate deploy && npm run seed && npm run start"
+
+volumes:
+  postgres_data:

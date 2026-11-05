@@ -1,0 +1,112 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum BookingStatus {
+  held
+  confirmed
+  cancelled
+  expired
+}
+
+model Host {
+  id           String      @id @default(cuid())
+  email        String      @unique
+  name         String
+  slug         String      @unique
+  passwordHash String
+  timezone     String      @default("UTC")
+  createdAt    DateTime    @default(now()) @db.Timestamptz(3)
+  eventTypes   EventType[]
+  bookings     Booking[]
+}
+
+model EventType {
+  id                    String                 @id @default(cuid())
+  hostId                String
+  host                  Host                   @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  name                  String
+  slug                  String
+  durationMinutes       Int
+  capacity              Int                    @default(1)
+  bufferBeforeMinutes   Int                    @default(0)
+  bufferAfterMinutes    Int                    @default(0)
+  minNoticeMinutes      Int                    @default(0)
+  bookingHorizonDays    Int                    @default(30)
+  createdAt             DateTime               @default(now()) @db.Timestamptz(3)
+  availabilityRules     AvailabilityRule[]
+  availabilityOverrides AvailabilityOverride[]
+  bookings              Booking[]
+
+  @@unique([hostId, slug])
+}
+
+model AvailabilityRule {
+  id          String    @id @default(cuid())
+  eventTypeId String
+  eventType   EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  dayOfWeek   Int
+  startMinute Int
+  endMinute   Int
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([eventTypeId, dayOfWeek])
+}
+
+model AvailabilityOverride {
+  id            String    @id @default(cuid())
+  eventTypeId   String
+  eventType     EventType @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  localDate     DateTime  @db.Date
+  isUnavailable Boolean   @default(false)
+  startMinute   Int?
+  endMinute     Int?
+  createdAt     DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@unique([eventTypeId, localDate])
+}
+
+model Booking {
+  id                  String         @id @default(cuid())
+  hostId              String
+  eventTypeId         String
+  host                Host           @relation(fields: [hostId], references: [id], onDelete: Cascade)
+  eventType           EventType      @relation(fields: [eventTypeId], references: [id], onDelete: Cascade)
+  status              BookingStatus  @default(held)
+  startUtc            DateTime       @db.Timestamptz(3)
+  endUtc              DateTime       @db.Timestamptz(3)
+  guestName           String?
+  guestEmail          String?
+  managementTokenHash String?        @unique
+  expiresAt           DateTime?      @db.Timestamptz(3)
+  cancellationReason  String?
+  createdAt           DateTime       @default(now()) @db.Timestamptz(3)
+  updatedAt           DateTime       @updatedAt @db.Timestamptz(3)
+  notifications       Notification[]
+
+  @@index([eventTypeId, status, startUtc, endUtc])
+  @@index([hostId, status])
+}
+
+model IdempotencyKey {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  requestHash String
+  response    Json?
+  createdAt   DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime @updatedAt @db.Timestamptz(3)
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  bookingId String
+  booking   Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  type      String
+  payload   Json
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+}
