@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { DateTime } from "luxon";
-import { buildSlotRange, isSlotAvailable } from "../../src/lib/booking";
+import {
+  buildSlotRange,
+  hasHostCalendarConflict,
+  isSlotAvailable,
+} from "../../src/lib/booking";
 
 const eventType = {
   id: "evt_1",
@@ -178,5 +182,110 @@ describe("booking availability", () => {
 
     expect(isSlotAvailable(args)).toBe(false);
     expect(isSlotAvailable({ ...args, excludeBookingId: "booking-0" })).toBe(true);
+  });
+
+  it("blocks cross-event overlaps using both event types' buffers", () => {
+    const now = new Date("2026-03-01T00:00:00.000Z");
+    const candidateEventType = { ...eventType, id: "candidate", bufferBeforeMinutes: 5, bufferAfterMinutes: 5 };
+    const start = new Date("2026-03-09T10:00:00.000Z");
+    const blocked = hasHostCalendarConflict({
+      eventType: candidateEventType,
+      slotStartUtc: start,
+      slotEndUtc: new Date("2026-03-09T11:00:00.000Z"),
+      now,
+      bookings: [{
+        id: "other-event-booking",
+        eventTypeId: "other-event",
+        startUtc: new Date("2026-03-09T11:09:00.000Z"),
+        endUtc: new Date("2026-03-09T12:09:00.000Z"),
+        status: "confirmed",
+        bufferBeforeMinutes: 10,
+        bufferAfterMinutes: 0,
+      }],
+    });
+
+    expect(blocked).toBe(true);
+
+    expect(hasHostCalendarConflict({
+      eventType: candidateEventType,
+      slotStartUtc: start,
+      slotEndUtc: new Date("2026-03-09T11:00:00.000Z"),
+      now,
+      bookings: [{
+        id: "other-event-after-buffer",
+        eventTypeId: "other-event",
+        startUtc: new Date("2026-03-09T08:55:00.000Z"),
+        endUtc: new Date("2026-03-09T09:55:00.000Z"),
+        status: "confirmed",
+        bufferBeforeMinutes: 0,
+        bufferAfterMinutes: 10,
+      }],
+    })).toBe(true);
+  });
+
+  it("counts an unexpired hold from another event type as a host conflict", () => {
+    const now = new Date("2026-03-01T00:00:00.000Z");
+    const start = new Date("2026-03-09T10:00:00.000Z");
+
+    expect(hasHostCalendarConflict({
+      eventType,
+      slotStartUtc: start,
+      slotEndUtc: new Date("2026-03-09T11:00:00.000Z"),
+      now,
+      bookings: [{
+        id: "active-cross-event-hold",
+        eventTypeId: "other-event",
+        startUtc: start,
+        endUtc: new Date("2026-03-09T11:00:00.000Z"),
+        status: "held",
+        expiresAt: new Date("2026-03-01T00:05:00.000Z"),
+        bufferBeforeMinutes: 0,
+        bufferAfterMinutes: 0,
+      }],
+    })).toBe(true);
+  });
+
+  it("ignores same-event group bookings and expired or cancelled cross-event bookings", () => {
+    const now = new Date("2026-03-01T00:00:00.000Z");
+    const start = new Date("2026-03-09T10:00:00.000Z");
+    const candidateEventType = { ...eventType, capacity: 3 };
+    const bookings = [
+      {
+        id: "same-event-group-seat",
+        eventTypeId: candidateEventType.id,
+        startUtc: start,
+        endUtc: new Date("2026-03-09T11:00:00.000Z"),
+        status: "confirmed",
+        bufferBeforeMinutes: 0,
+        bufferAfterMinutes: 0,
+      },
+      {
+        id: "expired-other-event",
+        eventTypeId: "other-event",
+        startUtc: start,
+        endUtc: new Date("2026-03-09T11:00:00.000Z"),
+        status: "held",
+        expiresAt: new Date("2026-02-28T23:59:59.000Z"),
+        bufferBeforeMinutes: 0,
+        bufferAfterMinutes: 0,
+      },
+      {
+        id: "cancelled-other-event",
+        eventTypeId: "other-event",
+        startUtc: start,
+        endUtc: new Date("2026-03-09T11:00:00.000Z"),
+        status: "cancelled",
+        bufferBeforeMinutes: 0,
+        bufferAfterMinutes: 0,
+      },
+    ];
+
+    expect(hasHostCalendarConflict({
+      eventType: candidateEventType,
+      slotStartUtc: start,
+      slotEndUtc: new Date("2026-03-09T11:00:00.000Z"),
+      bookings,
+      now,
+    })).toBe(false);
   });
 });

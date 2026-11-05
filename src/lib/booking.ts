@@ -14,6 +14,12 @@ export interface BookingRow {
   expiresAt?: Date | string | null;
 }
 
+export interface HostCalendarBooking extends BookingRow {
+  eventTypeId: string;
+  bufferBeforeMinutes: number;
+  bufferAfterMinutes: number;
+}
+
 export interface EventTypeLike {
   id: string;
   durationMinutes: number;
@@ -266,6 +272,47 @@ export function isSlotAvailable({
     getConflictCount({ eventType, slotStartUtc, slotEndUtc, bookings, now, excludeBookingId }) <
     eventType.capacity
   );
+}
+
+export function hasHostCalendarConflict({
+  eventType,
+  slotStartUtc,
+  slotEndUtc,
+  bookings,
+  now = new Date(),
+  excludeBookingId,
+}: {
+  eventType: EventTypeLike;
+  slotStartUtc: Date;
+  slotEndUtc: Date;
+  bookings: HostCalendarBooking[];
+  now?: Date;
+  excludeBookingId?: string;
+}) {
+  const candidateStart = slotStartUtc.getTime() - eventType.bufferBeforeMinutes * 60_000;
+  const candidateEnd = slotEndUtc.getTime() + eventType.bufferAfterMinutes * 60_000;
+
+  return bookings.some((booking) => {
+    if (
+      booking.id === excludeBookingId ||
+      booking.eventTypeId === eventType.id ||
+      booking.status === "cancelled" ||
+      booking.status === "expired"
+    ) {
+      return false;
+    }
+    if (booking.status === "held") {
+      if (!booking.expiresAt || new Date(booking.expiresAt).getTime() <= now.getTime()) return false;
+    } else if (booking.status !== "confirmed") {
+      return false;
+    }
+
+    const bookingStart =
+      new Date(booking.startUtc).getTime() - booking.bufferBeforeMinutes * 60_000;
+    const bookingEnd =
+      new Date(booking.endUtc).getTime() + booking.bufferAfterMinutes * 60_000;
+    return bookingStart < candidateEnd && bookingEnd > candidateStart;
+  });
 }
 
 export function formatGuestTime(value: string, timezone: string) {

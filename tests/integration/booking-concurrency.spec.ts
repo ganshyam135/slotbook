@@ -11,22 +11,32 @@ import {
   rescheduleBooking,
 } from "../../src/lib/booking-service";
 import { managementTokenForBooking } from "../../src/lib/auth";
+import { GET as getPublicSlots } from "../../src/app/api/hosts/[host]/events/[slug]/slots/route";
 
 const enabled = process.env.RUN_POSTGRES_INTEGRATION === "1" && Boolean(process.env.DATABASE_URL);
 const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => {
   const suffix = randomUUID();
   let hostId = "";
+  let hostSlug = "";
   let singleEventId = "";
   let groupEventId = "";
+  let otherEventId = "";
+  let otherEventSlug = "";
 
-  async function createEvent(slug: string, capacity: number) {
+  async function createEvent(
+    slug: string,
+    capacity: number,
+    options: { durationMinutes?: number; bufferBeforeMinutes?: number; bufferAfterMinutes?: number } = {},
+  ) {
     return db.eventType.create({
       data: {
         hostId,
         name: slug,
         slug: `${slug}-${suffix}`,
-        durationMinutes: 60,
+        durationMinutes: options.durationMinutes ?? 60,
         capacity,
+        bufferBeforeMinutes: options.bufferBeforeMinutes ?? 0,
+        bufferAfterMinutes: options.bufferAfterMinutes ?? 0,
         minNoticeMinutes: 0,
         bookingHorizonDays: 45,
         availabilityRules: {
@@ -79,8 +89,16 @@ const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => 
       },
     });
     hostId = host.id;
+    hostSlug = host.slug;
     singleEventId = (await createEvent("single", 1)).id;
     groupEventId = (await createEvent("group", 3)).id;
+    const otherEvent = await createEvent("other", 1, {
+      durationMinutes: 30,
+      bufferBeforeMinutes: 15,
+      bufferAfterMinutes: 10,
+    });
+    otherEventId = otherEvent.id;
+    otherEventSlug = otherEvent.slug;
   });
 
   afterAll(async () => {
@@ -115,6 +133,135 @@ const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => 
       },
     });
     expect(active).toBe(3);
+  });
+
+  it("allows non-overlapping bookings for different event types", async () => {
+    const first = await hold(singleEventId, slot(18, 9), "different-event-a");
+    const second = await hold(otherEventId, slot(18, 11), "different-event-b");
+
+    expect(first.status).toBe("held");
+    expect(second.status).toBe("held");
+  });
+
+  it("omits another event type's slot from the public availability response", async () => {
+    const blockedSlot = slot(27, 9);
+    await hold(singleEventId, blockedSlot, "public-availability-blocker");
+    const from = slot(27, 0);
+    const url = new URL("http://localhost/api/hosts/test/events/other/slots");
+    url.searchParams.set("from", from.toISOString());
+    url.searchParams.set("to", new Date(from.getTime() + 24 * 60 * 60_000).toISOString());
+    url.searchParams.set("tz", "UTC");
+    const response = await getPublicSlots(new Request(url), {
+      params: Promise.resolve({ host: hostSlug, slug: otherEventSlug }),
+    });
+    const body = await response.json() as { slots: Array<{ start: string }> };
+
+    expect(response.status).toBe(200);
+    expect(body.slots.some((available) => available.start === blockedSlot.toISOString())).toBe(false);
+  });
+
+  it("allows only one overlapping hold across different event types", async () => {
+    const start = slot(19, 9);
+    const attempts = await Promise.allSettled([
+      hold(singleEventId, start, "cross-event-a", randomUUID()),
+      hold(otherEventId, start, "cross-event-b", randomUUID()),
+    ]);
+
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter(
+      (attempt) => attempt.status === "rejected" && attempt.reason instanceof BookingError && attempt.reason.status === 409,
+    )).toHaveLength(1);
+  });
+
+  it("serializes many simultaneous requests competing for the host calendar", async () => {
+    const start = slot(20, 9);
+    const attempts = await Promise.allSettled(
+      Array.from({ length: 8 }, (_, index) =>
+        hold(index % 2 === 0 ? singleEventId : otherEventId, start, `host-race-${index}`, randomUUID()),
+      ),
+    );
+
+    expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
+    expect(attempts.filter(
+      (attempt) => attempt.status === "rejected" && attempt.reason instanceof BookingError && attempt.reason.status === 409,
+    )).toHaveLength(7);
+  });
+
+  it("treats an active hold for another event type as blocking the host calendar", async () => {
+    const start = slot(21, 9);
+    await hold(singleEventId, start, "host-calendar-active-hold");
+
+    await expect(hold(otherEventId, start, "blocked-by-active-hold"))
+      .rejects.toMatchObject({ status: 409 });
+  });
+
+  it("releases the host calendar when a hold expires", async () => {
+    const start = slot(22, 9);
+    const held = await hold(singleEventId, start, "host-calendar-expired-hold");
+    await db.booking.update({
+      where: { id: held.id },
+      data: { expiresAt: new Date(Date.now() - 1_000) },
+    });
+
+    const replacement = await hold(otherEventId, start, "available-after-expiry");
+    expect(replacement.status).toBe("held");
+  });
+
+  it("releases the host calendar when a booking is cancelled", async () => {
+    const start = slot(23, 9);
+    const held = await hold(singleEventId, start, "host-calendar-cancelled");
+    await confirmHold(held.id);
+    await cancelBooking(managementTokenForBooking(held.id), "test cancellation");
+
+    const replacement = await hold(otherEventId, start, "available-after-cancellation");
+    expect(replacement.status).toBe("held");
+  });
+
+  it("preserves the original booking when rescheduling into another event's occupied interval", async () => {
+    const originalStart = slot(24, 9);
+    const target = slot(24, 11);
+    const moving = await hold(singleEventId, originalStart, "cross-event-reschedule");
+    await confirmHold(moving.id);
+    await hold(otherEventId, target, "cross-event-reschedule-blocker");
+
+    await expect(rescheduleBooking(managementTokenForBooking(moving.id), target))
+      .rejects.toMatchObject({ status: 409 });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: moving.id } }))
+      .toMatchObject({ startUtc: originalStart, status: "confirmed" });
+  });
+
+  it("releases the old host-calendar interval after a successful reschedule", async () => {
+    const originalStart = slot(26, 9);
+    const newStart = slot(26, 11);
+    const moving = await hold(singleEventId, originalStart, "successful-host-reschedule");
+    await confirmHold(moving.id);
+    await rescheduleBooking(managementTokenForBooking(moving.id), newStart);
+
+    const replacement = await hold(otherEventId, originalStart, "rebook-released-interval");
+    expect(replacement.status).toBe("held");
+    expect(await db.booking.findUniqueOrThrow({ where: { id: moving.id } }))
+      .toMatchObject({ startUtc: newStart, status: "confirmed" });
+  });
+
+  it("rejects confirmation if another event already occupies the held interval", async () => {
+    const start = slot(25, 9);
+    const held = await hold(singleEventId, start, "confirmation-conflict");
+    await db.booking.create({
+      data: {
+        hostId,
+        eventTypeId: otherEventId,
+        status: "confirmed",
+        startUtc: start,
+        endUtc: new Date(start.getTime() + 30 * 60_000),
+      },
+    });
+
+    await expect(confirmHold(held.id, {
+      guestName: "Confirmation Conflict",
+      guestEmail: "confirmation-conflict@example.test",
+    })).rejects.toMatchObject({ status: 409 });
+    expect(await db.booking.findUniqueOrThrow({ where: { id: held.id } }))
+      .toMatchObject({ status: "held", startUtc: start });
   });
 
   it("allows only one of two simultaneous reschedules into a capacity-one slot", async () => {

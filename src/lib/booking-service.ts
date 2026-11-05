@@ -3,6 +3,7 @@ import type { Prisma } from "@prisma/client";
 import db from "@/lib/db";
 import {
   buildSlotRange,
+  hasHostCalendarConflict,
   isSlotAvailable,
   type BookingRow,
   type EventTypeLike,
@@ -71,6 +72,22 @@ async function lockEvent(tx: Transaction, eventTypeId: string) {
   return rows[0] ?? null;
 }
 
+async function lockHost(tx: Transaction, hostId: string) {
+  const rows = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT "id"
+    FROM "Host"
+    WHERE "id" = ${hostId}
+    FOR UPDATE
+  `;
+  return rows.length > 0;
+}
+
+async function lockHostEvent(tx: Transaction, hostId: string, eventTypeId: string) {
+  if (!(await lockHost(tx, hostId))) return null;
+  const event = await lockEvent(tx, eventTypeId);
+  return event?.hostId === hostId ? event : null;
+}
+
 async function lockBooking(tx: Transaction, bookingId: string) {
   const rows = await tx.$queryRaw<LockedBooking[]>`
     SELECT
@@ -92,11 +109,21 @@ async function databaseNow(tx: Transaction) {
   return rows[0];
 }
 
-async function activeBookings(tx: Transaction, eventTypeId: string, now: Date, excludeId?: string) {
+async function activeBookings(
+  tx: Transaction,
+  eventType: EventTypeLike,
+  slotStartUtc: Date,
+  slotEndUtc: Date,
+  now: Date,
+  excludeId?: string,
+) {
+  const bufferWindow = (eventType.bufferBeforeMinutes + eventType.bufferAfterMinutes) * 60_000;
   const rows = await tx.booking.findMany({
     where: {
-      eventTypeId,
+      eventTypeId: eventType.id,
       id: excludeId ? { not: excludeId } : undefined,
+      startUtc: { lt: new Date(slotEndUtc.getTime() + bufferWindow) },
+      endUtc: { gt: new Date(slotStartUtc.getTime() - bufferWindow) },
       OR: [
         { status: "confirmed" },
         { status: "held", expiresAt: { gt: now } },
@@ -111,6 +138,58 @@ async function activeBookings(tx: Transaction, eventTypeId: string, now: Date, e
     },
   });
   return rows satisfies BookingRow[];
+}
+
+async function activeHostBookings(
+  tx: Transaction,
+  hostId: string,
+  eventType: EventTypeLike,
+  slotStartUtc: Date,
+  slotEndUtc: Date,
+  now: Date,
+) {
+  const bufferLimits = await tx.eventType.aggregate({
+    where: { hostId },
+    _max: { bufferBeforeMinutes: true, bufferAfterMinutes: true },
+  });
+  const earliestEnd = new Date(
+    slotStartUtc.getTime() -
+      (eventType.bufferBeforeMinutes + (bufferLimits._max.bufferAfterMinutes ?? 0)) * 60_000,
+  );
+  const latestStart = new Date(
+    slotEndUtc.getTime() +
+      (eventType.bufferAfterMinutes + (bufferLimits._max.bufferBeforeMinutes ?? 0)) * 60_000,
+  );
+  const rows = await tx.booking.findMany({
+    where: {
+      hostId,
+      startUtc: { lt: latestStart },
+      endUtc: { gt: earliestEnd },
+      OR: [
+        { status: "confirmed" },
+        { status: "held", expiresAt: { gt: now } },
+      ],
+    },
+    select: {
+      id: true,
+      eventTypeId: true,
+      startUtc: true,
+      endUtc: true,
+      status: true,
+      expiresAt: true,
+      eventType: {
+        select: {
+          bufferBeforeMinutes: true,
+          bufferAfterMinutes: true,
+        },
+      },
+    },
+  });
+  return rows.map((booking) => ({
+    ...booking,
+    bufferBeforeMinutes: booking.eventType.bufferBeforeMinutes,
+    bufferAfterMinutes: booking.eventType.bufferAfterMinutes,
+  }));
 }
 
 function eventAsAvailabilityType(event: LockedEvent): EventTypeLike {
@@ -195,7 +274,12 @@ export async function createHold({
       if (idempotency.response) return { ...idempotency.response, replay: true };
     }
 
-    const event = await lockEvent(tx, eventTypeId);
+    const identity = await tx.eventType.findUnique({
+      where: { id: eventTypeId },
+      select: { hostId: true },
+    });
+    if (!identity) throw new BookingError("Event not found.", 404);
+    const event = await lockHostEvent(tx, identity.hostId, eventTypeId);
     if (!event) throw new BookingError("Event not found.", 404);
     const { now, holdExpiresAt } = await databaseNow(tx);
     const end = new Date(start.getTime() + event.durationMinutes * 60_000);
@@ -204,10 +288,11 @@ export async function createHold({
       throw new BookingError("The selected time is outside the event's available schedule.", 409);
     }
 
-    const existing = await activeBookings(tx, event.id, now);
+    const eventType = eventAsAvailabilityType(event);
+    const existing = await activeBookings(tx, eventType, start, end, now);
     if (
       !isSlotAvailable({
-        eventType: eventAsAvailabilityType(event),
+        eventType,
         slotStartUtc: start,
         slotEndUtc: end,
         bookings: existing,
@@ -215,6 +300,18 @@ export async function createHold({
       })
     ) {
       throw new BookingError("This slot is no longer available.", 409);
+    }
+    const hostBookings = await activeHostBookings(tx, event.hostId, eventType, start, end, now);
+    if (
+      hasHostCalendarConflict({
+        eventType,
+        slotStartUtc: start,
+        slotEndUtc: end,
+        bookings: hostBookings,
+        now,
+      })
+    ) {
+      throw new BookingError("This time conflicts with another booking on the host's calendar.", 409);
     }
 
     const bookingId = randomUUID();
@@ -285,9 +382,23 @@ export async function confirmHold(
   bookingId: string,
   guestDetails?: { guestName: string; guestEmail: string },
 ) {
+  const bookingIdentity = await db.booking.findUnique({
+    where: { id: bookingId },
+    select: { hostId: true, eventTypeId: true },
+  });
+  if (!bookingIdentity) throw new BookingError("Hold not found.", 404);
+
   const result = await db.$transaction(async (tx) => {
+    const event = await lockHostEvent(tx, bookingIdentity.hostId, bookingIdentity.eventTypeId);
+    if (!event) throw new BookingError("Hold not found.", 404);
     const booking = await lockBooking(tx, bookingId);
-    if (!booking) throw new BookingError("Hold not found.", 404);
+    if (
+      !booking ||
+      booking.hostId !== bookingIdentity.hostId ||
+      booking.eventTypeId !== bookingIdentity.eventTypeId
+    ) {
+      throw new BookingError("Hold not found.", 404);
+    }
     if (booking.status !== "held") {
       throw new BookingError("Only active holds can be confirmed.", 409);
     }
@@ -305,6 +416,28 @@ export async function confirmHold(
     const guestEmail = guestDetails?.guestEmail ?? booking.guestEmail;
     if (!guestName || !guestEmail) {
       throw new BookingError("Guest name and email are required before confirmation.", 400);
+    }
+
+    const eventType = eventAsAvailabilityType(event);
+    const hostBookings = await activeHostBookings(
+      tx,
+      event.hostId,
+      eventType,
+      booking.startUtc,
+      booking.endUtc,
+      now,
+    );
+    if (
+      hasHostCalendarConflict({
+        eventType,
+        slotStartUtc: booking.startUtc,
+        slotEndUtc: booking.endUtc,
+        bookings: hostBookings,
+        now,
+        excludeBookingId: booking.id,
+      })
+    ) {
+      throw new BookingError("This hold conflicts with another booking on the host's calendar.", 409);
     }
 
     const updated = await tx.booking.update({
@@ -341,15 +474,20 @@ export async function rescheduleBooking(token: string, newStart: Date) {
   const tokenHash = hashManagementToken(token);
   const bookingIdentity = await db.booking.findUnique({
     where: { managementTokenHash: tokenHash },
-    select: { id: true, eventTypeId: true },
+    select: { id: true, hostId: true, eventTypeId: true },
   });
   if (!bookingIdentity) throw new BookingError("Booking not found or token invalid.", 404);
 
   return db.$transaction(async (tx) => {
-    const event = await lockEvent(tx, bookingIdentity.eventTypeId);
+    const event = await lockHostEvent(tx, bookingIdentity.hostId, bookingIdentity.eventTypeId);
     if (!event) throw new BookingError("Event not found.", 404);
     const booking = await lockBooking(tx, bookingIdentity.id);
-    if (!booking || booking.status !== "confirmed") {
+    if (
+      !booking ||
+      booking.hostId !== bookingIdentity.hostId ||
+      booking.eventTypeId !== bookingIdentity.eventTypeId ||
+      booking.status !== "confirmed"
+    ) {
       throw new BookingError("Only confirmed bookings can be rescheduled.", 409);
     }
 
@@ -359,10 +497,11 @@ export async function rescheduleBooking(token: string, newStart: Date) {
       throw new BookingError("The selected time is outside the event's available schedule.", 409);
     }
 
-    const existing = await activeBookings(tx, event.id, now, booking.id);
+    const eventType = eventAsAvailabilityType(event);
+    const existing = await activeBookings(tx, eventType, newStart, newEnd, now, booking.id);
     if (
       !isSlotAvailable({
-        eventType: eventAsAvailabilityType(event),
+        eventType,
         slotStartUtc: newStart,
         slotEndUtc: newEnd,
         bookings: existing,
@@ -370,6 +509,19 @@ export async function rescheduleBooking(token: string, newStart: Date) {
       })
     ) {
       throw new BookingError("The selected slot is unavailable for rescheduling.", 409);
+    }
+    const hostBookings = await activeHostBookings(tx, event.hostId, eventType, newStart, newEnd, now);
+    if (
+      hasHostCalendarConflict({
+        eventType,
+        slotStartUtc: newStart,
+        slotEndUtc: newEnd,
+        bookings: hostBookings,
+        now,
+        excludeBookingId: booking.id,
+      })
+    ) {
+      throw new BookingError("The selected time conflicts with another booking on the host's calendar.", 409);
     }
 
     const updated = await tx.booking.update({
@@ -395,13 +547,20 @@ export async function rescheduleBooking(token: string, newStart: Date) {
 export async function cancelBooking(token: string, reason: string) {
   const bookingIdentity = await db.booking.findUnique({
     where: { managementTokenHash: hashManagementToken(token) },
-    select: { id: true },
+    select: { id: true, hostId: true, eventTypeId: true },
   });
   if (!bookingIdentity) throw new BookingError("Booking not found or token invalid.", 404);
 
   return db.$transaction(async (tx) => {
+    const event = await lockHostEvent(tx, bookingIdentity.hostId, bookingIdentity.eventTypeId);
+    if (!event) throw new BookingError("Booking not found.", 404);
     const booking = await lockBooking(tx, bookingIdentity.id);
-    if (!booking || booking.status !== "confirmed") {
+    if (
+      !booking ||
+      booking.hostId !== bookingIdentity.hostId ||
+      booking.eventTypeId !== bookingIdentity.eventTypeId ||
+      booking.status !== "confirmed"
+    ) {
       throw new BookingError("Only confirmed bookings can be cancelled.", 409);
     }
 
@@ -426,8 +585,21 @@ export async function cancelBooking(token: string, reason: string) {
 
 export async function cancelBookingForHost(bookingId: string, hostId: string, reason: string) {
   return db.$transaction(async (tx) => {
+    const identity = await tx.booking.findUnique({
+      where: { id: bookingId },
+      select: { hostId: true, eventTypeId: true },
+    });
+    if (!identity || identity.hostId !== hostId) {
+      throw new BookingError("Booking not found.", 404);
+    }
+    const event = await lockHostEvent(tx, hostId, identity.eventTypeId);
+    if (!event) throw new BookingError("Booking not found.", 404);
     const booking = await lockBooking(tx, bookingId);
-    if (!booking || booking.hostId !== hostId) {
+    if (
+      !booking ||
+      booking.hostId !== hostId ||
+      booking.eventTypeId !== identity.eventTypeId
+    ) {
       throw new BookingError("Booking not found.", 404);
     }
     if (booking.status !== "held" && booking.status !== "confirmed") {

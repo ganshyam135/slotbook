@@ -1,7 +1,7 @@
 import { DateTime, IANAZone } from "luxon";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { buildSlotRange } from "@/lib/booking";
+import { buildSlotRange, hasHostCalendarConflict } from "@/lib/booking";
 import db from "@/lib/db";
 
 const querySchema = z.object({
@@ -43,14 +43,6 @@ export async function GET(
         include: {
           availabilityRules: true,
           availabilityOverrides: true,
-          bookings: {
-            where: {
-              OR: [
-                { status: "confirmed" },
-                { status: "held", expiresAt: { gt: now } },
-              ],
-            },
-          },
         },
       },
     },
@@ -60,6 +52,52 @@ export async function GET(
   const event = hostRecord.eventTypes[0];
   if (!event) return NextResponse.json({ message: "Event type not found." }, { status: 404 });
 
+  const bufferLimits = await db.eventType.aggregate({
+    where: { hostId: hostRecord.id },
+    _max: { bufferBeforeMinutes: true, bufferAfterMinutes: true },
+  });
+  const earliestEnd = new Date(
+    from.getTime() -
+      (event.bufferBeforeMinutes + (bufferLimits._max.bufferAfterMinutes ?? 0)) * 60_000,
+  );
+  const latestStart = new Date(
+    to.getTime() +
+      (event.durationMinutes +
+        event.bufferAfterMinutes +
+        (bufferLimits._max.bufferBeforeMinutes ?? 0)) *
+        60_000,
+  );
+  const hostBookings = await db.booking.findMany({
+    where: {
+      hostId: hostRecord.id,
+      startUtc: { lt: latestStart },
+      endUtc: { gt: earliestEnd },
+      OR: [
+        { status: "confirmed" },
+        { status: "held", expiresAt: { gt: now } },
+      ],
+    },
+    select: {
+      id: true,
+      eventTypeId: true,
+      startUtc: true,
+      endUtc: true,
+      status: true,
+      expiresAt: true,
+      eventType: {
+        select: {
+          bufferBeforeMinutes: true,
+          bufferAfterMinutes: true,
+        },
+      },
+    },
+  });
+  const hostCalendarBookings = hostBookings.map((booking) => ({
+    ...booking,
+    bufferBeforeMinutes: booking.eventType.bufferBeforeMinutes,
+    bufferAfterMinutes: booking.eventType.bufferAfterMinutes,
+  }));
+  const eventBookings = hostCalendarBookings.filter((booking) => booking.eventTypeId === event.id);
   const slots = buildSlotRange({
     eventType: event,
     hostTimezone: hostRecord.timezone,
@@ -67,9 +105,15 @@ export async function GET(
     to,
     rules: event.availabilityRules,
     overrides: event.availabilityOverrides,
-    bookings: event.bookings,
+    bookings: eventBookings,
     now,
-  }).map((slot) => {
+  }).filter((slot) => !hasHostCalendarConflict({
+    eventType: event,
+    slotStartUtc: new Date(slot.start),
+    slotEndUtc: new Date(slot.end),
+    bookings: hostCalendarBookings,
+    now,
+  })).map((slot) => {
     const guestStart = DateTime.fromISO(slot.start, { zone: "utc" }).setZone(parsed.data.tz);
     return {
       ...slot,
