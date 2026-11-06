@@ -10,6 +10,7 @@
     "db:migrate": "prisma migrate deploy",
     "db:migrate:dev": "prisma migrate dev",
     "db:push": "prisma db push",
+    "db:test:env": "node scripts/setup-test-db-env.mjs",
     "prisma:generate": "prisma generate",
     "seed": "tsx src/lib/seed.ts",
     "test": "vitest run",

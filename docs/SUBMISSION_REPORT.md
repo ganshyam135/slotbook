@@ -1,62 +1,79 @@
 # Slotbook submission report
 
-## 1. Links
+## Project summary
 
-This deliverable is the local workspace project. No remote repository, pull request, or deployment URL has been created.
+Slotbook is a host-and-guest appointment scheduling application. Hosts configure event types, weekly availability, date overrides, profile details, and review upcoming bookings. Guests browse public availability, create and confirm a temporary hold, and manage confirmed appointments through a private link.
 
-## 2. Architecture
+No deployment URL, remote repository link, or screenshot is claimed here.
 
-The app uses Next.js App Router pages and route handlers, shared TypeScript business logic, Prisma, and PostgreSQL. Guest pages browse event slots and use private management links; hosts sign in to a dashboard. Booking operations are isolated in `src/lib/booking-service.ts`.
+## Architecture and data model
 
-## 3. Data model
+The application uses Next.js App Router pages and route handlers, React, strict TypeScript, Tailwind CSS, Prisma, and PostgreSQL. API routes validate input and call business logic in `src/lib`; PostgreSQL is the source of truth.
 
-The normalized schema includes hosts, event types, weekly availability rules, date overrides, bookings, idempotency records, and notification events. SQL migrations add relational, unique, index, range, and held-expiry constraints. Booking instants are PostgreSQL `TIMESTAMPTZ`; local override days are `DATE`.
+The Prisma model contains:
 
-## 4. Key technical decisions
+- `Host` and `EventType` for host identity, event configuration, duration, capacity, buffers, notice, and booking horizon.
+- `AvailabilityRule` for recurring host-local weekday windows and `AvailabilityOverride` for date-specific closures or hours.
+- `Booking` for UTC start/end instants, guest details, lifecycle status, hold expiry, cancellation reason, and a stored management-token hash.
+- `IdempotencyKey` for durable request identity/results and `Notification` for transactional lifecycle event records.
 
-1. Use a unified booking record with explicit `held`, `confirmed`, `cancelled`, and `expired` states.
-2. Set hold expiry from PostgreSQL `clock_timestamp()` rather than trusting client time.
-3. Serialize reservations for one event by locking the PostgreSQL `EventType` row.
-4. Persist idempotency key and result in the same transaction as the booking.
-5. Derive a private token with server-keyed HMAC from a random booking UUID and persist only the token hash.
-6. Store event instants in UTC and retain host availability as local wall-clock rules.
-7. Omit nonexistent and ambiguous DST slot starts rather than silently normalizing or choosing an offset.
-8. Write notification sink records in the same transaction as their booking state transition.
+The checked-in PostgreSQL migration adds relational constraints, indexes, uniqueness constraints, and check constraints. The Compose setup supplies an isolated PostgreSQL test database; it does not containerize the app.
 
-## 5. Reliability and failure handling
+## Booking lifecycle and concurrency
 
-Hold creation rechecks configured availability and capacity while holding the event-row lock. A failed reschedule leaves the original booking unchanged because the capacity check and update are one transaction. Duplicate confirmation fails after the first successful transition. Idempotency-key reuse with a different payload returns `409`.
+The lifecycle is `held → confirmed → cancelled`; a held booking can instead become `expired`. PostgreSQL sets a hold's expiration to `clock_timestamp() + INTERVAL '5 minutes'`. Capacity reads compare expiry with database time, so elapsed holds do not consume a seat even before a status cleanup occurs.
 
-These transaction behaviors are implemented in code and have real-PostgreSQL integration tests, but those tests have not run successfully in this environment.
+Mutations that can change active booking intervals use PostgreSQL transactions and row locks. They acquire locks in the order **host → event type → booking** (hold creation first serializes its idempotency record, then follows this order). The host row is the shared calendar lock across different event types; event locks preserve per-event capacity. After taking locks, the service rechecks schedule, capacity, buffers, and host-wide conflicts before writing. There are no JavaScript in-memory locks.
 
-## 6. Time-zone handling and DST example
+Confirmed bookings and unexpired holds reserve host calendar time. Cancelled and expired bookings do not. Overlap checks include duration and configured buffers. Confirmation revalidates the calendar. Rescheduling checks and updates the target inside one transaction, so a failed move leaves the prior booking unchanged and a successful move releases the old interval atomically. Idempotency results are stored with the booking transaction; replaying the same key and payload returns the original result, while reusing a key with different content returns `409`.
 
-Host weekly rules use IANA time zones; persisted start/end values are UTC instants; guest responses include their local day/time. For `America/New_York` on 2026-03-08, the local clock jumps from 01:59 EST to 03:00 EDT. A 02:15 appointment start is nonexistent and omitted; 03:00 EDT corresponds to `2026-03-08T07:00:00Z`.
+## Time zones and DST
 
-## 7. Optional extensions
+Weekly availability is expressed as wall-clock time in the host's IANA time zone; override dates are local calendar dates. Appointment starts and ends are stored as PostgreSQL `TIMESTAMPTZ` instants. Guests can select a display time zone; public availability returns localized labels without guest or booking identifiers.
 
-No optional extensions such as rate limiting, observability, load testing, or deployment were undertaken. Real email delivery is intentionally absent; notifications are database sink records.
+Nonexistent DST local start times and ambiguous repeated local start times are omitted rather than silently shifted or assigned an arbitrary offset. A nonexistent availability-window end is normalized forward by Luxon; an ambiguous window end uses the later occurrence. Appointment duration is elapsed time.
 
-## 8. Testing and actual results
+## Authentication and booking management
 
-- `npm test`: passed 9 unit tests; 7 PostgreSQL integration tests were skipped in the normal run.
-- `npm run lint`: passed after fixing a React effect-state lint issue.
-- `npm run build`: passed after the booking changes.
-- `npx prisma validate`: passed for the Prisma schema.
-- `npm run test:integration`: attempted but failed during setup because PostgreSQL authentication rejected the configured `slotbook` user. None of its concurrency tests ran.
-- `npx prisma migrate deploy`: attempted but failed with Prisma `P1000` for the same authentication reason.
+Host passwords are bcrypt-hashed. Host sessions are signed, expire after eight hours, and use an HTTP-only, SameSite=Lax cookie that is Secure in production. Guest management links are private token-bearing URLs; the database stores a hash, and the token is validated server-side for management operations and self-excluding reschedule availability. Cancelling requires a reason field; host cancellation also requires a reason.
 
-No database-dependent test is reported as passed.
+## Notifications
 
-## 9. AI usage
+Booking state transitions write notification sink records in their database transaction. These records are not sent as email; an outbound email delivery service is not implemented.
 
-AI assistance was used for repository inspection, requirements comparison, code changes, test authoring, validation, and documentation. Generated code was iteratively corrected in response to TypeScript, unit-test, lint, and environment failures. Details are recorded in [AI_LOG.md](../AI_LOG.md).
+## Testing strategy and actual results
 
-## 10. Known gaps and next steps
+Verification was run against the local project and the isolated Docker PostgreSQL test database (`slotbook_test`), using separate retained `slotbook_integration` and `slotbook_e2e` schemas. The runners reject the development database and do not reset or truncate it.
 
-- No host UI/API currently creates or edits event types, recurring availability, date overrides, or host timezone/profile settings.
-- The database migration, demo seeding, record retrieval, and transaction tests still need to run against a PostgreSQL test database with valid credentials.
-- Docker startup was not tested because the Docker Desktop Linux engine was unavailable.
-- Playwright end-to-end coverage and email delivery are not implemented.
+Latest recorded results:
 
-The next milestone should be to configure an accessible disposable PostgreSQL database, apply the migration, run seeding and integration tests, then implement host event and availability management.
+| Check | Result |
+|---|---|
+| `npm run test` (twice) | Passed both runs: 32 unit tests passed; 27 PostgreSQL-only tests skipped by the unit runner. |
+| `npm test` | Passed: 32 unit tests passed; 27 PostgreSQL-only tests skipped. |
+| `npm run test:integration` | Passed: 27 real-PostgreSQL integration tests. |
+| `npm run test:e2e` | Passed: 15 Playwright tests, five each in Chromium, Firefox, and WebKit. |
+| `npm run lint` | Passed. |
+| `npx tsc --noEmit` | Passed. |
+| `npm run build` | Passed; optimized production build and integrated type checking completed. |
+| `git diff --check` | Passed during this submission documentation update. |
+
+Integration coverage includes event capacity and host-wide overlap races, limited group capacity, concurrent rescheduling, idempotency retries, active/expired holds, confirmation, and cancellation. E2E coverage exercises guest booking/management and host management across the three browser projects.
+
+The prior PostgreSQL setup also applied the checked-in migration and ran the seed without resetting the development database. The seed requires a locally configured `HOST_PASSWORD`; it does not define or publish a default password.
+
+## AI usage
+
+AI assistance was used throughout the project for codebase inspection, assignment comparison, implementation, test authoring, debugging, and documentation. Changes were checked against existing implementation and tests; failed browser runs were diagnosed from their Playwright traces before fixes were made. Current browser results are reported as passed only after the successful three-browser run. The AI usage history and verification notes are recorded in [AI_LOG.md](../AI_LOG.md).
+
+## Remaining limitations and submission gaps
+
+- The original assignment PDF was not present in the workspace. The requirements comparison uses the supplied assignment-text snapshot referenced by the existing audit; PDF-specific wording could not be independently checked.
+- The recorded assignment requirements identify pnpm as the requested package manager, while this project uses npm and `package-lock.json`.
+- The recorded requirements call for sidebar navigation; the dashboard uses a top-level header/navigation instead.
+- The recorded requirements mention shadcn/ui and Lucide where useful. The application uses Tailwind UI; Lucide is a dependency but its icons are not currently used.
+- Docker Compose is intentionally database-only, per the setup scope; it does not run the Next.js app, migrations, or seed automatically. Those are separate documented commands.
+- `docs/SUBMISSION_REPORT.md` is Markdown. If the evaluator requires a PDF report, a PDF export remains necessary.
+- No production deployment or real outbound email delivery is included. Notification events are database records only.
+
+See [docs/REQUIREMENTS_AUDIT.md](./REQUIREMENTS_AUDIT.md) for the itemized requirement status and evidence.

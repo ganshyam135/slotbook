@@ -197,7 +197,7 @@ export function EventTypeManager({
           <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-500">No event types yet.</p>
         ) : (
           eventTypes.map((eventType) => (
-            <article key={eventType.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
+            <article key={eventType.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-4 transition hover:border-indigo-200 hover:bg-white">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="font-medium text-slate-900">{eventType.name}</p>
@@ -209,14 +209,14 @@ export function EventTypeManager({
                 <div className="flex items-center gap-3">
                   <a
                     href={`/${hostSlug}/${eventType.slug}`}
-                    className="text-sm font-medium text-indigo-600"
+                    className="rounded-sm text-sm font-medium text-indigo-600 hover:text-indigo-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                   >
                     Public page
                   </a>
                   <button
                     type="button"
                     onClick={() => startEdit(eventType)}
-                    className="text-sm font-medium text-slate-700"
+                    className="rounded-sm text-sm font-medium text-slate-700 hover:text-indigo-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
                   >
                     Edit
                   </button>
@@ -224,7 +224,7 @@ export function EventTypeManager({
                     type="button"
                     onClick={() => void remove(eventType)}
                     disabled={deletingId === eventType.id}
-                    className="text-sm font-medium text-rose-600 disabled:opacity-50"
+                    className="rounded-sm text-sm font-medium text-rose-600 hover:text-rose-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500 disabled:cursor-not-allowed disabled:opacity-50"
                   >
                     {deletingId === eventType.id ? "Deleting..." : "Delete"}
                   </button>

@@ -1,131 +1,137 @@
 # Slotbook
 
-Slotbook is a Next.js appointment-booking prototype with a public guest booking flow, a host dashboard, and a PostgreSQL-backed booking model. Booking operations use PostgreSQL transactions and event-row locks; the local unit suite also covers scheduling and daylight-saving behavior.
+Slotbook is a PostgreSQL-backed appointment scheduling application. Hosts manage event types and local availability; guests find a time, reserve a short hold, confirm, and manage the resulting booking.
 
-## Stack
+## Features
 
-- Next.js App Router, React, TypeScript (strict mode), Tailwind CSS
-- PostgreSQL 16+, Prisma ORM and checked-in SQL migration
-- Zod request validation, Luxon IANA timezone handling
-- Vitest unit and PostgreSQL integration tests
-- Docker Compose for a disposable local PostgreSQL service
+- Host login and dashboard for event types, weekly availability, date overrides, profile/time zone, and upcoming bookings.
+- Public date/time selection with guest time-zone display and availability indicators.
+- Five-minute holds, booking confirmation, private guest management links, rescheduling, and cancellation.
+- Capacity limits, buffers, minimum notice, booking horizon, idempotency, and host-wide overlap protection.
+- PostgreSQL notification-event records; no email is sent.
+
+## Architecture and technology
+
+- Next.js App Router, React, TypeScript (strict mode), and Tailwind CSS.
+- PostgreSQL as the source of truth; Prisma schema and checked-in SQL migrations.
+- Zod request validation and Luxon IANA time-zone/DST handling.
+- Business logic in `src/lib`; route handlers under `src/app/api`; reusable UI in `src/components`.
+- Vitest unit and PostgreSQL integration tests; Playwright E2E tests in Chromium, Firefox, and WebKit.
+
+Booking writes use PostgreSQL transactions. Operations that change active booking intervals acquire the host row lock before event and booking locks, then recheck availability and capacity. This makes the host calendar the shared resource across event types. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
 
 ## Prerequisites
 
-- Node.js 22 and npm
-- Docker Desktop with its Linux engine running, or a separately installed PostgreSQL 16+ instance with a test database and credentials
+- Node.js 22 and npm.
+- PostgreSQL 16+ for development, or Docker Desktop with Docker Compose for the isolated test database.
+- Playwright browser binaries for E2E tests: `npx playwright install chromium firefox webkit`.
 
-## Environment
+## Environment configuration
 
-Copy `.env.example` to `.env`, then set a private `AUTH_SECRET` of at least 32 characters. For a local PostgreSQL server, configure `DATABASE_URL` with that database's credentials. Never use the sample database password or secret outside local development.
+Copy `.env.example` to `.env` and set private values. `DATABASE_URL` is the application/development database. Set `AUTH_SECRET` to a private value of at least 32 characters and set `HOST_PASSWORD` to the password for the seeded demo host (at least 12 characters). The seed uses `HOST_EMAIL` if supplied; otherwise it uses `demo@slotbook.app`.
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-The `.env.example` values are placeholders. If Docker is unavailable, install/run PostgreSQL locally and set `DATABASE_URL` to a database you own, for example `postgresql://<user>:<password>@localhost:5432/slotbook?schema=public`. Then apply migrations and seed as shown below. The integration suite must use a disposable PostgreSQL test database; it creates and deletes test hosts.
+`.env` is local and ignored by Git. Never commit real environment values. The test setup creates a separate ignored `.env.test.local`; it does not overwrite `.env` or `DATABASE_URL`.
 
-## Local development
+## Isolated Docker PostgreSQL for tests
 
-1. Install dependencies:
-   ```powershell
-   npm ci --legacy-peer-deps
-   ```
-2. Start PostgreSQL:
-   ```powershell
-   docker compose up -d db
-   ```
-3. Apply the checked-in migration and seed the demo host:
-   ```powershell
-   npm run db:migrate
-   npm run seed
-   ```
-4. Start Next.js:
-   ```powershell
-   npm run dev
-   ```
+The Compose setup starts PostgreSQL only; it does not containerize or start the Next.js application. It creates database `slotbook_test` with a dedicated local test user, maps `127.0.0.1:5434` to container port 5432, and persists data in the uniquely named `slotbook_test_postgres_data` volume. It does not use the development PostgreSQL server on port 5433.
 
-The demo host email defaults to `demo@slotbook.app`; set `HOST_PASSWORD` to a private password of at least 12 characters in `.env`. The same configured values are used by the repeatable seed.
-
-## Docker
-
-After setting `AUTH_SECRET` in `.env`, run:
+Generate the ignored test environment file once. The command creates a random local test password and refuses to overwrite an existing file:
 
 ```powershell
-docker compose up --build
+npm run db:test:env
+docker compose --env-file .env.test.local up -d db
 ```
 
-Compose waits for PostgreSQL health, runs `prisma migrate deploy`, seeds repeatable demo records, and starts the app. Set `POSTGRES_PASSWORD`, `HOST_PASSWORD`, and `AUTH_SECRET` in `.env`; do not commit real credentials or expose this local configuration publicly.
+Wait for the health check:
 
-## Main routes
+```powershell
+for ($attempt = 0; $attempt -lt 30; $attempt++) {
+  $health = docker inspect --format='{{.State.Health.Status}}' slotbook-test-postgres
+  if ($health -eq "healthy") { break }
+  Start-Sleep -Seconds 2
+}
+if ($health -ne "healthy") { throw "Slotbook test PostgreSQL did not become healthy." }
+```
 
-- `/demo-host/intro-call` — public event booking
-- `/dashboard` — signed-cookie host dashboard
-- `/login` — host login
-- `/bookings/:token` — private booking management, confirmation, reschedule, and cancellation
+The integration and Playwright runners load `.env.test.local`, validate that its database differs from `DATABASE_URL`, and migrate their own retained schemas: `slotbook_integration` and `slotbook_e2e`. Do not seed the test database; the suites create their own fixtures.
 
-## REST API
+Stop the service without deleting its data:
 
-- `GET /api/hosts/{host}/events/{slug}/slots?from=&to=&tz=` — available UTC instants with guest-local date/time labels
-- `POST /api/holds` — accepts `{ eventTypeId, start, timezone }` to create a five-minute hold; guest details may also be supplied. Supports `Idempotency-Key`; reusing a key with a different request returns `409`.
-- `POST /api/holds/{id}/confirm` — confirms an unexpired hold and accepts `{ guestName, guestEmail }` when they were not supplied at hold creation
-- `POST /api/bookings/{token}/reschedule` — accepts `{ newStart }`
-- `POST /api/bookings/{token}/cancel` — accepts an optional `{ reason }`
-- `POST /api/host/bookings/{id}/cancel` — host-only cancellation with a required reason
-- `GET /api/host/event-types` — list event types for the authenticated host
-- `POST /api/host/event-types` — create an event type
-- `PATCH /api/host/event-types/{id}` — update an event type
-- `DELETE /api/host/event-types/{id}` — delete only if the event has no booking history
-- `PATCH /api/host/profile` — update the authenticated host name and IANA home time zone
-- `GET`/`PUT /api/host/event-types/{id}/availability` — read/replace host-local weekly windows
-- `GET`/`POST /api/host/event-types/{id}/overrides` — list/create a date override
-- `PATCH`/`DELETE /api/host/event-types/{id}/overrides/{overrideId}` — edit/remove an override
+```powershell
+docker compose --env-file .env.test.local stop db
+```
 
-The notification table is a database sink; no real email is sent.
+Do not use `down -v` if you want to preserve the named volume.
 
-## Booking and time-zone behavior
+## Migrations, seed, and development
 
-- A hold expiry is set by PostgreSQL to `clock_timestamp() + INTERVAL '5 minutes'`.
-- Hold creation locks the event row before checking overlaps/capacity and inserting.
-- Rescheduling holds the same event lock and atomically updates the existing booking only after the target slot passes schedule and capacity checks.
-- Holds with `expiresAt <= database time`, expired rows, and cancelled rows do not consume capacity.
-- Booking timestamps use PostgreSQL `TIMESTAMPTZ`; recurring availability and date overrides use host-local wall time / date.
-- Nonexistent DST wall-clock starts are skipped. Ambiguous repeated wall-clock starts are omitted rather than choosing an offset silently. See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md).
-
-## Validation and tests
+Install dependencies and generate Prisma Client:
 
 ```powershell
 npm ci --legacy-peer-deps
-npx playwright install chromium firefox webkit
-npm run lint
-npm test
-npm run test:e2e
-npm run build
-npm run test:integration
+npx prisma generate
 ```
 
-`npm test` runs deterministic unit tests and reports PostgreSQL integration tests as skipped. `npm run test:integration` requires `E2E_DATABASE_URL` to point to a dedicated PostgreSQL test database different from `DATABASE_URL`; it creates the retained `slotbook_integration` schema, applies migrations there, and uses uniquely identified host fixtures. It never falls back to `DATABASE_URL`, drops/truncates data, or modifies the development database.
+After confirming that `DATABASE_URL` names the intended development database, apply migrations and optionally seed the demo host and event types:
 
-`npm run test:e2e` launches the actual Next.js app on `http://127.0.0.1:3100` and runs the Chromium, Firefox, and WebKit projects. Playwright downloads browser binaries separately from npm dependencies; install them with `npx playwright install chromium firefox webkit`. Failure screenshots, traces, video, and the HTML report are written to ignored `test-results/` and `playwright-report/` folders.
+```powershell
+npm run db:migrate
+npm run seed
+```
 
-Playwright requires `E2E_DATABASE_URL` to point to a dedicated PostgreSQL test database different from `DATABASE_URL`; it refuses to fall back to the development URL. Prisma uses the isolated PostgreSQL schema `slotbook_e2e`. The suite never resets, truncates, or drops a database or schema. It applies the checked-in migrations to the isolated schema, creates a uniquely named host and event fixture, and removes only that fixture host (and its dependent test records) on teardown. The schema and migration ledger are retained. The test account password is generated for each run and stored only in ignored `.playwright/fixture.json`; stale recorded fixtures are identity-checked and cleaned at the next run.
+These commands use `DATABASE_URL`; they are not part of Docker test startup. The seed requires `HOST_PASSWORD` and upserts `demo-host` with `intro-call` and `office-hours`.
 
-For CI, configure `E2E_DATABASE_URL` as a PostgreSQL test connection and install the browser binaries before running `npm run test:e2e`. PostgreSQL fixtures are real and isolated; the browser tests do not mock API responses or substitute SQLite.
+Start the application:
 
-## Dependency security
+```powershell
+npm run dev
+```
 
-The latest `npm audit --omit=dev` reports no production advisories. The full audit reports eight moderate advisories in the development lint toolchain: `eslint-config-next` 16.4.5 includes `typescript-eslint`, whose parser depends on vulnerable `minimatch` versions. npm only offers a forced downgrade of `eslint-config-next` to 15.5.29 as a fix; this would move the project off Next.js 16 and was not applied. The remaining advisory is limited to development tooling.
+## Demo host and pages
 
-Vitest and its coverage provider were upgraded from 2.x to 5.1.0 to address the test-runner advisories; Vite 7.3.7 is installed as Vitest 5's required peer. Unit, PostgreSQL integration, cross-browser E2E, lint, and production build checks pass with this toolchain.
+- Demo email: `demo@slotbook.app` (unless overridden by `HOST_EMAIL`).
+- Password: the local `HOST_PASSWORD` value configured before running the seed. No default demo password is published or committed.
+- Public event: `/demo-host/intro-call`.
+- Host sign-in: `/login`; dashboard: `/dashboard`.
+- Private guest management links are created after booking confirmation and should be treated as secrets.
 
-## 60-second UI tour
+## API overview
 
-Open `/login` and sign in with the demo account. The dashboard lists seeded event types and upcoming bookings. Open `/demo-host/intro-call` to browse slots, change the guest timezone, and confirm a booking. The confirmation link opens its private management page, where a guest can reschedule or cancel. Host cancellation is available from the dashboard.
+Public booking:
 
-## Known gaps
+- `GET /api/hosts/{host}/events/{slug}/slots?from={ISO}&to={ISO}&tz={IANA}` — returns available slots and a privacy-safe availability summary; it does not return guest names, emails, or booking identifiers.
+- `POST /api/holds` — creates a hold from `{ eventTypeId, start, timezone }`; optional guest details may be supplied. Supports `Idempotency-Key`; key reuse with a different request returns `409`.
+- `POST /api/holds/{id}/confirm` — confirms an unexpired hold; accepts `{ guestName, guestEmail }` if not already supplied.
+- `POST /api/bookings/{token}/reschedule` — guest management token authorizes `{ newStart }`; availability is revalidated by the server.
+- `POST /api/bookings/{token}/cancel` — guest management token authorizes cancellation with optional `{ reason }`.
 
-- Host event type, profile, weekly availability, and date override management are available in the dashboard. Chromium E2E tests cover host authentication/management and the guest hold, confirmation, private-link, reschedule, cancellation, and capacity-release journey against PostgreSQL.
-- PostgreSQL 18 is configured locally on port 5433. Docker Desktop's Linux engine is unavailable in this environment, so local PostgreSQL is used for database-backed verification.
-- The full npm audit still reports eight moderate development-tooling advisories described above; email delivery is intentionally not implemented.
+Host operations:
 
-See [docs/REQUIREMENTS_AUDIT.md](./docs/REQUIREMENTS_AUDIT.md) for the itemized acceptance status.
+- `POST /api/auth/login` and `POST /api/auth/logout` — host session login/logout.
+- `GET /api/host/event-types`; `POST /api/host/event-types`; `PATCH` and `DELETE /api/host/event-types/{id}` — authenticated event type management.
+- `PATCH /api/host/profile` — update host name and IANA time zone.
+- `GET`/`PUT /api/host/event-types/{id}/availability` — read/replace weekly availability.
+- `GET`/`POST /api/host/event-types/{id}/overrides` and `PATCH`/`DELETE /api/host/event-types/{id}/overrides/{overrideId}` — manage date overrides.
+- `POST /api/host/bookings/{id}/cancel` — authenticated host cancellation with a required reason.
+
+The database notification sink records lifecycle events; it does not deliver email.
+
+## Tests and verification
+
+```powershell
+npm run lint
+npm test
+npm run test:integration
+npm run test:e2e
+npx tsc --noEmit
+npm run build
+```
+
+`npm test` runs the unit suite; PostgreSQL-only cases are skipped there by design. `npm run test:integration` requires the isolated test database and applies migrations to `slotbook_integration`. `npm run test:e2e` starts the actual Next.js app, applies migrations to `slotbook_e2e`, and runs against real PostgreSQL in all three browser projects. Both database-backed runners refuse to fall back to `DATABASE_URL`; neither resets nor truncates the database. E2E setup and teardown own and clean only their fixtures; schemas and migration history remain. Playwright reports, screenshots, traces, videos, local fixture data, and environment files are ignored by Git.
+
+Latest recorded verification: 32 unit tests passed (27 PostgreSQL tests skipped by the unit runner); all 27 PostgreSQL integration tests passed; all 15 Playwright tests passed (five per browser); lint, TypeScript checking, and the production build passed. See [docs/SUBMISSION_REPORT.md](./docs/SUBMISSION_REPORT.md) and [docs/REQUIREMENTS_AUDIT.md](./docs/REQUIREMENTS_AUDIT.md) for scope, exact results, and remaining gaps.

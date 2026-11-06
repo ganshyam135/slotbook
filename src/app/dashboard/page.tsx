@@ -51,7 +51,7 @@ export default async function DashboardPage() {
       ...booking,
       eventName: event.name,
     })),
-  );
+  ).sort((first, second) => first.startUtc.getTime() - second.startUtc.getTime());
 
   return (
     <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
@@ -100,15 +100,33 @@ export default async function DashboardPage() {
               <p className="text-sm text-slate-500">No bookings yet.</p>
             ) : (
               upcomingBookings.map((booking) => (
-                <div key={booking.id} className="flex items-center justify-between rounded-2xl border border-slate-200 bg-slate-50 p-4">
+                <div key={booking.id} className="flex flex-col gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div>
                     <p className="font-medium text-slate-900">{booking.eventName}</p>
-                    <p className="text-sm text-slate-600">
-                      {booking.guestName ?? "Guest"} · {new Date(booking.startUtc).toLocaleString(undefined, { timeZone: host.timezone })}
+                    <p className="mt-1 text-sm text-slate-700">
+                      {booking.guestName ?? "Guest"} ·{" "}
+                      <time dateTime={booking.startUtc.toISOString()}>
+                        {new Intl.DateTimeFormat("en-US", {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                          year: "numeric",
+                          hour: "numeric",
+                          minute: "2-digit",
+                          timeZone: host.timezone,
+                          timeZoneName: "short",
+                        }).format(booking.startUtc)}
+                      </time>
                     </p>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="rounded-full bg-emerald-100 px-2.5 py-1 text-xs font-semibold text-emerald-700 uppercase tracking-wide">
+                  <div className="flex items-center justify-between gap-3 sm:justify-end">
+                    <span className={`rounded-full px-2.5 py-1 text-xs font-semibold uppercase tracking-wide ${
+                      booking.status === "confirmed"
+                        ? "bg-emerald-100 text-emerald-700"
+                        : booking.status === "held"
+                          ? "bg-amber-100 text-amber-800"
+                          : "bg-slate-200 text-slate-700"
+                    }`}>
                       {booking.status}
                     </span>
                     <HostCancelButton bookingId={booking.id} />

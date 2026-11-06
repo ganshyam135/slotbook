@@ -42,6 +42,7 @@ export default async function EventPage({
           eventId={event.id}
           eventName={event.name}
           durationMinutes={event.durationMinutes}
+          capacity={event.capacity}
           description={`Available for ${event.capacity} guest${event.capacity > 1 ? "s" : ""} · ${event.durationMinutes} minute session`}
         />
       </div>

@@ -1,7 +1,8 @@
 import { DateTime, IANAZone } from "luxon";
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { buildSlotRange, hasHostCalendarConflict } from "@/lib/booking";
+import { buildSlotRange, getConflictCount, hasHostCalendarConflict } from "@/lib/booking";
+import { getBookingByToken } from "@/lib/booking-service";
 import db from "@/lib/db";
 
 const querySchema = z.object({
@@ -31,6 +32,16 @@ export async function GET(
     return NextResponse.json({ message: "The requested range must be positive and no longer than 31 days." }, { status: 400 });
   }
 
+  let managementBooking: Awaited<ReturnType<typeof getBookingByToken>> = null;
+  const authorization = request.headers.get("authorization");
+  if (authorization) {
+    const token = /^Bearer ([a-f0-9]{64})$/i.exec(authorization)?.[1];
+    managementBooking = token ? await getBookingByToken(token) : null;
+    if (!managementBooking || managementBooking.status !== "confirmed") {
+      return NextResponse.json({ message: "Booking not found or token invalid." }, { status: 404 });
+    }
+  }
+
   const clock = await db.$queryRaw<Array<{ now: Date }>>`
     SELECT clock_timestamp() AS "now"
   `;
@@ -51,6 +62,13 @@ export async function GET(
   if (!hostRecord) return NextResponse.json({ message: "Host not found." }, { status: 404 });
   const event = hostRecord.eventTypes[0];
   if (!event) return NextResponse.json({ message: "Event type not found." }, { status: 404 });
+  if (
+    managementBooking &&
+    (managementBooking.eventTypeId !== event.id || managementBooking.eventType.host.slug !== host)
+  ) {
+    return NextResponse.json({ message: "Booking not found or token invalid." }, { status: 404 });
+  }
+  const excludedBookingId = managementBooking?.id;
 
   const bufferLimits = await db.eventType.aggregate({
     where: { hostId: hostRecord.id },
@@ -98,29 +116,54 @@ export async function GET(
     bufferAfterMinutes: booking.eventType.bufferAfterMinutes,
   }));
   const eventBookings = hostCalendarBookings.filter((booking) => booking.eventTypeId === event.id);
-  const slots = buildSlotRange({
+  const availability = buildSlotRange({
     eventType: event,
     hostTimezone: hostRecord.timezone,
     from,
     to,
     rules: event.availabilityRules,
     overrides: event.availabilityOverrides,
-    bookings: eventBookings,
+    bookings: [],
     now,
-  }).filter((slot) => !hasHostCalendarConflict({
-    eventType: event,
-    slotStartUtc: new Date(slot.start),
-    slotEndUtc: new Date(slot.end),
-    bookings: hostCalendarBookings,
-    now,
-  })).map((slot) => {
+  }).map((slot) => {
+    const slotStart = new Date(slot.start);
+    const slotEnd = new Date(slot.end);
+    const remainingCapacity = Math.max(0, event.capacity - getConflictCount({
+      eventType: event,
+      slotStartUtc: slotStart,
+      slotEndUtc: slotEnd,
+      bookings: eventBookings,
+      now,
+      excludeBookingId: excludedBookingId,
+    }));
+    const hostConflict = hasHostCalendarConflict({
+      eventType: event,
+      slotStartUtc: slotStart,
+      slotEndUtc: slotEnd,
+      bookings: hostCalendarBookings,
+      now,
+      excludeBookingId: excludedBookingId,
+    });
     const guestStart = DateTime.fromISO(slot.start, { zone: "utc" }).setZone(parsed.data.tz);
     return {
       ...slot,
       guestDay: guestStart.toFormat("yyyy-MM-dd"),
       guestTime: guestStart.toLocaleString(DateTime.TIME_SIMPLE),
+      available: remainingCapacity > 0 && !hostConflict,
+      remainingCapacity,
     };
   });
 
-  return NextResponse.json({ slots });
+  const slots = availability
+    .filter((slot) => slot.available)
+    .map((slot) => ({
+      start: slot.start,
+      end: slot.end,
+      guestDay: slot.guestDay,
+      guestTime: slot.guestTime,
+      remainingCapacity: slot.remainingCapacity,
+    }));
+  return NextResponse.json({ slots, availability }, {
+    headers: { "Cache-Control": "private, no-store" },
+  });
 }

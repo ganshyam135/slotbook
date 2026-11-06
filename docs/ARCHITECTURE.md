@@ -35,7 +35,7 @@ The consistent lifecycle lock order is **host → event type → booking**. Hold
 
 Confirmed bookings and unexpired holds consume the shared host calendar. Expired and cancelled rows are excluded using database-time expiry checks. Public slot listings apply the same cross-event conflict rule as a convenience; `POST /api/holds`, confirmation, and rescheduling recheck inside the locking transaction and remain authoritative. No JavaScript mutex or external locking service participates in correctness.
 
-The PostgreSQL integration suite in `tests/integration/booking-concurrency.spec.ts` covers same-event capacity, simultaneous cross-event holds, non-overlapping event types, active/expired/cancelled holds, cross-event rescheduling, confirmation conflict detection, idempotent retries, expiry, and cancellation. `npm run test:integration` requires `E2E_DATABASE_URL` to target a dedicated test database distinct from `DATABASE_URL`; it migrates the retained `slotbook_integration` schema and never resets or truncates data. The suite has not been run in the current environment because no dedicated test URL is configured.
+The PostgreSQL integration suite in `tests/integration` covers same-event capacity, simultaneous cross-event holds, non-overlapping event types, active/expired/cancelled holds, cross-event rescheduling, confirmation conflict detection, idempotent retries, expiry, and cancellation. `npm run test:integration` requires `E2E_DATABASE_URL` to target a dedicated test database distinct from `DATABASE_URL`; it migrates the retained `slotbook_integration` schema and never resets or truncates data. The latest recorded run passed all 27 integration tests against the isolated Docker PostgreSQL database.
 
 ## Time-zone and DST policy
 
@@ -54,6 +54,6 @@ Passwords use bcrypt. The host cookie contains a host ID and expiry signed with 
 - API payloads are validated with Zod; conflicting slots and idempotency-key reuse produce explicit `409` responses.
 - Booking transitions and notification records share the same transaction.
 - Notifications are persisted in PostgreSQL only. No email delivery is claimed.
-- Unit tests cover isolated scheduling, buffers, capacity semantics, host-calendar conflict rules, DST, and signed-token behavior.
+- Unit tests cover isolated scheduling, buffers, capacity semantics, host-calendar conflict rules, DST, and signed-token behavior. The latest unit run passed 32 tests; the 27 database integration tests are excluded/skipped by that runner and are run separately.
 - Host-side event/availability CRUD and profile settings are implemented in the dashboard and protected APIs.
-- PostgreSQL integration and Playwright E2E tests require a separately configured `E2E_DATABASE_URL`, and refuse to fall back to `DATABASE_URL`; no such dedicated URL is currently configured in this environment, so those database-backed suites were not run for this change.
+- PostgreSQL integration and Playwright E2E tests require a separately configured `E2E_DATABASE_URL` and refuse to fall back to `DATABASE_URL`. The latest recorded integration run passed 27 tests; the latest Playwright run passed all 15 tests across Chromium, Firefox, and WebKit. Their schemas are separate and retained; tests clean only their owned records.

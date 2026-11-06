@@ -19,6 +19,7 @@ const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => 
   let hostId = "";
   let hostSlug = "";
   let singleEventId = "";
+  let singleEventSlug = "";
   let groupEventId = "";
   let otherEventId = "";
   let otherEventSlug = "";
@@ -90,7 +91,9 @@ const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => 
     });
     hostId = host.id;
     hostSlug = host.slug;
-    singleEventId = (await createEvent("single", 1)).id;
+    const singleEvent = await createEvent("single", 1);
+    singleEventId = singleEvent.id;
+    singleEventSlug = singleEvent.slug;
     groupEventId = (await createEvent("group", 3)).id;
     const otherEvent = await createEvent("other", 1, {
       durationMinutes: 30,
@@ -158,6 +161,41 @@ const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => 
 
     expect(response.status).toBe(200);
     expect(body.slots.some((available) => available.start === blockedSlot.toISOString())).toBe(false);
+  });
+
+  it("allows only the matching confirmed management token to exclude its own booking", async () => {
+    const start = slot(29, 9);
+    const booking = await hold(singleEventId, start, "self-exclusion");
+    await confirmHold(booking.id);
+    const token = managementTokenForBooking(booking.id);
+    const from = slot(29, 0);
+    const url = new URL("http://localhost/api/hosts/test/events/single/slots");
+    url.searchParams.set("from", from.toISOString());
+    url.searchParams.set("to", new Date(from.getTime() + 24 * 60 * 60_000).toISOString());
+    url.searchParams.set("tz", "UTC");
+    const params = Promise.resolve({ host: hostSlug, slug: singleEventSlug });
+    const publicResponse = await getPublicSlots(new Request(url), { params });
+    const ownResponse = await getPublicSlots(
+      new Request(url, { headers: { Authorization: `Bearer ${token}` } }),
+      { params },
+    );
+    const invalidResponse = await getPublicSlots(
+      new Request(url, { headers: { Authorization: `Bearer ${"0".repeat(64)}` } }),
+      { params },
+    );
+    const mismatchedEventResponse = await getPublicSlots(
+      new Request(url, { headers: { Authorization: `Bearer ${token}` } }),
+      { params: Promise.resolve({ host: hostSlug, slug: otherEventSlug }) },
+    );
+
+    expect(publicResponse.status).toBe(200);
+    expect(ownResponse.status).toBe(200);
+    expect(invalidResponse.status).toBe(404);
+    expect(mismatchedEventResponse.status).toBe(404);
+    const publicBody = await publicResponse.json() as { slots: Array<{ start: string }> };
+    const ownBody = await ownResponse.json() as { slots: Array<{ start: string }> };
+    expect(publicBody.slots.some((available) => available.start === start.toISOString())).toBe(false);
+    expect(ownBody.slots.some((available) => available.start === start.toISOString())).toBe(true);
   });
 
   it("allows only one overlapping hold across different event types", async () => {

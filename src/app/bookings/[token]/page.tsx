@@ -52,6 +52,10 @@ export default async function BookingManagementPage({
         <BookingManagementActions
           bookingId={booking.id}
           token={token}
+          hostSlug={booking.eventType.host.slug}
+          eventSlug={booking.eventType.slug}
+          durationMinutes={booking.eventType.durationMinutes}
+          capacity={booking.eventType.capacity}
           status={holdExpired ? "expired" : booking.status}
           holdExpired={holdExpired}
           guestName={booking.guestName}

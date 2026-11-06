@@ -2,6 +2,7 @@
 
 import { DateTime } from "luxon";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { AvailabilityPicker } from "@/components/AvailabilityPicker";
 
 const subscribeToBrowserTimezone = () => () => {};
 const getBrowserTimezone = () => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
@@ -13,6 +14,7 @@ interface BookingFlowProps {
   eventId: string;
   eventName: string;
   durationMinutes: number;
+  capacity: number;
   description?: string | null;
 }
 
@@ -21,10 +23,16 @@ interface AvailableSlot {
   end: string;
   guestDay: string;
   guestTime: string;
+  remainingCapacity: number;
+}
+
+interface SlotAvailability extends AvailableSlot {
+  available: boolean;
 }
 
 interface SlotResponse {
   slots: AvailableSlot[];
+  availability: SlotAvailability[];
 }
 
 interface BookingResponse {
@@ -39,10 +47,12 @@ interface ActiveHold {
   id: string;
   expiresAt: string;
   managementLink: string;
+  start: string;
 }
 
 interface ConfirmedBooking {
   managementLink: string;
+  start: string;
 }
 
 export function BookingFlow({
@@ -51,6 +61,7 @@ export function BookingFlow({
   eventId,
   eventName,
   durationMinutes,
+  capacity,
   description,
 }: BookingFlowProps) {
   const defaultTz = useSyncExternalStore(
@@ -62,7 +73,7 @@ export function BookingFlow({
   const timezone = timezoneOverride ?? defaultTz;
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
-  const [slots, setSlots] = useState<AvailableSlot[]>([]);
+  const [timeOptions, setTimeOptions] = useState<SlotAvailability[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [guestName, setGuestName] = useState("");
@@ -72,6 +83,7 @@ export function BookingFlow({
   const [activeHold, setActiveHold] = useState<ActiveHold | null>(null);
   const [confirmedBooking, setConfirmedBooking] = useState<ConfirmedBooking | null>(null);
   const [secondsRemaining, setSecondsRemaining] = useState(0);
+  const [availabilityVersion, setAvailabilityVersion] = useState(0);
   const idempotencyRef = useRef<{ signature: string; key: string } | null>(null);
 
   const dateOptions = useMemo(
@@ -99,9 +111,12 @@ export function BookingFlow({
         const payload = (await response.json()) as SlotResponse & { message?: string };
         if (!response.ok) throw new Error(payload.message ?? "Unable to load available times.");
         setLoadError(null);
-        setSlots(payload.slots ?? []);
+        setTimeOptions(payload.availability ?? (payload.slots ?? []).map((slot) => ({
+          ...slot,
+          available: true,
+        })));
         setSelectedSlot(null);
-        setSelectedDate(payload.slots[0]?.guestDay ?? dateOptions[0] ?? null);
+        setSelectedDate(payload.slots[0]?.guestDay ?? null);
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
@@ -112,7 +127,7 @@ export function BookingFlow({
       });
 
     return () => controller.abort();
-  }, [dateOptions, eventSlug, hostSlug, timezone]);
+  }, [availabilityVersion, dateOptions, eventSlug, hostSlug, timezone]);
 
   useEffect(() => {
     if (!activeHold) return;
@@ -123,10 +138,10 @@ export function BookingFlow({
     return () => window.clearInterval(timer);
   }, [activeHold]);
 
-  const filteredSlots = useMemo(
-    () => (selectedDate ? slots.filter((slot) => slot.guestDay === selectedDate) : []),
-    [selectedDate, slots],
-  );
+  function refreshAvailability() {
+    setLoading(true);
+    setAvailabilityVersion((version) => version + 1);
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -163,6 +178,11 @@ export function BookingFlow({
         !hold.expiresAt ||
         !hold.managementLink
       ) {
+        if (holdResponse.status === 409) {
+          setSelectedSlot(null);
+          refreshAvailability();
+          throw new Error("That time is no longer available. Availability has been refreshed; choose another time.");
+        }
         throw new Error(hold.message ?? "Unable to hold this time.");
       }
 
@@ -170,6 +190,7 @@ export function BookingFlow({
         id: hold.id,
         expiresAt: hold.expiresAt,
         managementLink: hold.managementLink,
+        start: selectedSlot,
       };
       setActiveHold(newHold);
       setSecondsRemaining(Math.max(0, Math.ceil((new Date(hold.expiresAt).getTime() - Date.now()) / 1000)));
@@ -200,11 +221,12 @@ export function BookingFlow({
         if (confirmResponse.status === 409) {
           setActiveHold(null);
           setSelectedSlot(null);
+          refreshAvailability();
         }
         throw new Error(confirmation.message ?? "Your booking could not be confirmed.");
       }
 
-      setConfirmedBooking({ managementLink: confirmation.managementLink });
+      setConfirmedBooking({ managementLink: confirmation.managementLink, start: activeHold.start });
       setActiveHold(null);
       setSelectedSlot(null);
       setMessage(null);
@@ -224,6 +246,18 @@ export function BookingFlow({
 
   const bookingLocked = Boolean(activeHold || confirmedBooking);
   const timeRemaining = `${Math.floor(secondsRemaining / 60)}:${String(secondsRemaining % 60).padStart(2, "0")}`;
+  const summaryStart = confirmedBooking?.start ?? activeHold?.start ?? selectedSlot;
+  const summaryDateTime = summaryStart
+    ? DateTime.fromISO(summaryStart, { zone: "utc" })
+        .setZone(timezone)
+        .toLocaleString({
+          weekday: "long",
+          month: "long",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        })
+    : null;
 
   return (
     <div className="grid gap-8 lg:grid-cols-[1.2fr_0.8fr]">
@@ -245,6 +279,7 @@ export function BookingFlow({
               setLoading(true);
               setLoadError(null);
               setSelectedSlot(null);
+              setTimeOptions([]);
               setTimezoneOverride(event.target.value);
             }}
             disabled={bookingLocked}
@@ -260,60 +295,22 @@ export function BookingFlow({
           </select>
         </div>
 
-        <div className="mb-5 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {dateOptions.map((date) => (
-            <button
-              key={date}
-              type="button"
-              disabled={bookingLocked}
-              onClick={() => {
-                setSelectedDate(date);
-                setSelectedSlot(null);
-              }}
-              className={`rounded-xl border px-3 py-2 text-sm ${
-                selectedDate === date
-                  ? "border-indigo-500 bg-indigo-50 text-indigo-700"
-                  : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-              }`}
-            >
-              {DateTime.fromISO(`${date}T12:00`, { zone: timezone })
-                .setLocale("en-US")
-                .toLocaleString({ month: "short", day: "numeric" })}
-            </button>
-          ))}
-        </div>
-
-        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-          <div className="mb-3 flex items-center justify-between">
-            <h3 className="text-sm font-semibold uppercase tracking-[0.18em] text-slate-600">Available times</h3>
-            {loading ? <span className="text-xs text-slate-500">Loading...</span> : null}
-          </div>
-          {loadError ? <p className="mb-3 text-sm text-rose-600">{loadError}</p> : null}
-          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {filteredSlots.length === 0 ? (
-              <p className="col-span-full text-sm text-slate-500">No slots available for this day.</p>
-            ) : (
-              filteredSlots.map((slot) => {
-                const isSelected = selectedSlot === slot.start;
-                return (
-                  <button
-                    key={slot.start}
-                    type="button"
-                    disabled={bookingLocked}
-                    onClick={() => setSelectedSlot(slot.start)}
-                    className={`rounded-xl border px-3 py-2 text-sm font-medium ${
-                      isSelected
-                        ? "border-emerald-500 bg-emerald-50 text-emerald-700"
-                        : "border-slate-200 bg-white text-slate-700 hover:border-slate-300"
-                    }`}
-                  >
-                    {slot.guestTime}
-                  </button>
-                );
-              })
-            )}
-          </div>
-        </div>
+        <AvailabilityPicker
+          dateOptions={dateOptions}
+          timezone={timezone}
+          slots={timeOptions}
+          selectedDate={selectedDate}
+          selectedSlot={selectedSlot}
+          capacity={capacity}
+          loading={loading}
+          disabled={bookingLocked}
+          loadError={loadError}
+          onDateChange={(date) => {
+            setSelectedDate(date);
+            setSelectedSlot(null);
+          }}
+          onSlotChange={setSelectedSlot}
+        />
       </div>
 
       <div className="rounded-3xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -322,10 +319,14 @@ export function BookingFlow({
         </h3>
         {description ? <p className="mt-3 text-sm text-slate-600">{description}</p> : null}
         <div className="mt-6 space-y-4">
-          <div className="rounded-xl bg-slate-50 p-3 text-sm text-slate-700">
-            Selected slot: {selectedSlot
-              ? DateTime.fromISO(selectedSlot, { zone: "utc" }).setZone(timezone).toLocaleString(DateTime.DATETIME_MED)
-              : "Choose a date and time"}
+          <div className="rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
+            <p className="font-medium text-slate-900">
+              {confirmedBooking ? "Appointment" : activeHold ? "Held appointment" : "Selected appointment"}
+            </p>
+            <p className="mt-1">{summaryDateTime ?? "Choose a date and available time"}</p>
+            <p className="mt-2 text-xs text-slate-600">
+              {durationMinutes} minutes · Capacity {capacity} {capacity === 1 ? "guest" : "guests"} · {timezone}
+            </p>
           </div>
 
           {!activeHold && !confirmedBooking ? (
@@ -342,8 +343,11 @@ export function BookingFlow({
 
           {activeHold && secondsRemaining > 0 ? (
             <>
-              <p role="status" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-                This time is held for you for <strong>{timeRemaining}</strong>. Enter your details and confirm before the timer expires.
+              <p role="status" className="flex items-center justify-between gap-3 rounded-xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-950">
+                <span>Held for you. Enter your details and confirm before it expires.</span>
+                <strong aria-label="Time remaining to confirm" className="shrink-0 rounded-lg bg-amber-200 px-2.5 py-1 font-mono text-base tabular-nums">
+                  {timeRemaining}
+                </strong>
               </p>
               <form onSubmit={handleConfirm} className="space-y-4">
                 <label className="block text-sm font-medium text-slate-700">

@@ -1,40 +1,22 @@
 services:
   db:
     image: postgres:16-alpine
-    container_name: slotbook-db
+    container_name: slotbook-test-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: slotbook
-      POSTGRES_USER: slotbook
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: slotbook_test
+      POSTGRES_USER: slotbook_test_app
+      POSTGRES_PASSWORD: ${SLOTBOOK_TEST_DB_PASSWORD:?Run npm run db:test:env to create the ignored test environment file}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - slotbook_test_postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U slotbook -d slotbook"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
-      retries: 10
-
-  app:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: slotbook-app
-    restart: unless-stopped
-    environment:
-      DATABASE_URL: postgresql://slotbook:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/slotbook?schema=public
-      NEXT_PUBLIC_APP_URL: http://localhost:3000
-      AUTH_SECRET: ${AUTH_SECRET:?Set AUTH_SECRET in .env}
-      HOST_EMAIL: ${HOST_EMAIL:-demo@slotbook.app}
-      HOST_PASSWORD: ${HOST_PASSWORD:?Set HOST_PASSWORD in .env}
-    ports:
-      - "3000:3000"
-    depends_on:
-      db:
-        condition: service_healthy
-    command: sh -c "npx prisma migrate deploy && npm run seed && npm run start"
+      retries: 12
 
 volumes:
-  postgres_data:
+  slotbook_test_postgres_data:
+    name: slotbook_test_postgres_data

@@ -629,7 +629,7 @@ export async function cancelBookingForHost(bookingId: string, hostId: string, re
 export async function getBookingByToken(token: string) {
   return db.booking.findUnique({
     where: { managementTokenHash: hashManagementToken(token) },
-    include: { eventType: { include: { host: { select: { timezone: true } } } } },
+    include: { eventType: { include: { host: { select: { slug: true, timezone: true } } } } },
   });
 }
 

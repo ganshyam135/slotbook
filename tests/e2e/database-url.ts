@@ -1,6 +1,7 @@
 import { config } from "dotenv";
 
 config();
+config({ path: ".env.test.local", override: true });
 
 export const E2E_SCHEMA = "slotbook_e2e";
 

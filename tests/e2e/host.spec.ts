@@ -3,6 +3,30 @@ import type { Page } from "@playwright/test";
 import { DateTime } from "luxon";
 import { randomUUID } from "node:crypto";
 import { readE2EFixture } from "./fixture";
+import { e2eDb } from "./test-db";
+
+test.afterEach(async () => {
+  const fixture = readE2EFixture();
+  const eventTypes = await e2eDb.eventType.findMany({
+    where: {
+      hostId: fixture.hostId,
+      OR: [
+        { slug: { startsWith: "e2e-schedule-" } },
+        { slug: { startsWith: "e2e-delete-" } },
+      ],
+    },
+    select: { id: true },
+  });
+  const eventTypeIds = eventTypes.map((eventType) => eventType.id);
+  if (eventTypeIds.length > 0) {
+    await e2eDb.booking.deleteMany({ where: { eventTypeId: { in: eventTypeIds } } });
+    await e2eDb.eventType.deleteMany({ where: { id: { in: eventTypeIds } } });
+  }
+  await e2eDb.host.update({
+    where: { id: fixture.hostId },
+    data: { name: fixture.hostName, timezone: "UTC" },
+  });
+});
 
 async function login(page: Page, fixture: ReturnType<typeof readE2EFixture>) {
   await page.goto("/login");
@@ -29,7 +53,8 @@ test("protects the dashboard and rejects invalid host credentials", async ({ pag
   await expect(page.getByText("Invalid email or password.")).toBeVisible();
 });
 
-test("host manages event types, profile, weekly hours, and date overrides", async ({ page }) => {
+test("host manages event types, profile, weekly hours, and date overrides", async ({ page, request }) => {
+  test.setTimeout(45_000);
   const fixture = readE2EFixture();
   const browserErrors: string[] = [];
   let expectingConflict = false;
@@ -143,7 +168,9 @@ test("host manages event types, profile, weekly hours, and date overrides", asyn
     `/api/hosts/${fixture.hostSlug}/events/${eventSlug}/slots?${query}`,
   );
   expect(restoredSlotsResponse.ok()).toBeTruthy();
-  const restoredSlots = (await restoredSlotsResponse.json() as { slots: Array<{ start: string }> }).slots;
+  const restoredSlots = (await restoredSlotsResponse.json() as {
+    slots: Array<{ start: string; guestDay: string; guestTime: string }>;
+  }).slots;
   expect(restoredSlots.length).toBeGreaterThan(0);
   const held = await page.request.post("/api/holds", {
     data: {
@@ -153,10 +180,82 @@ test("host manages event types, profile, weekly hours, and date overrides", asyn
     },
   });
   expect(held.status()).toBe(201);
+  const limitedAvailabilityResponse = await page.request.get(
+    `/api/hosts/${fixture.hostSlug}/events/${eventSlug}/slots?${query}`,
+  );
+  const limitedAvailability = await limitedAvailabilityResponse.json() as {
+    slots: Array<{ start: string; remainingCapacity: number }>;
+    availability: Array<{
+      start: string;
+      available: boolean;
+      remainingCapacity: number;
+      guestName?: string;
+      guestEmail?: string;
+      bookingId?: string;
+      id?: string;
+    }>;
+  };
+  const heldSlotSummary = limitedAvailability.availability.find(
+    (slot) => slot.start === restoredSlots[0].start,
+  );
+  expect(heldSlotSummary).toMatchObject({ available: true, remainingCapacity: 1 });
+  expect(limitedAvailability.slots.find((slot) => slot.start === restoredSlots[0].start)?.remainingCapacity)
+    .toBe(1);
+  expect(heldSlotSummary).not.toHaveProperty("guestName");
+  expect(heldSlotSummary).not.toHaveProperty("guestEmail");
+  expect(heldSlotSummary).not.toHaveProperty("bookingId");
+  expect(heldSlotSummary).not.toHaveProperty("id");
+
+  const guestDateLabel = DateTime.fromISO(`${restoredSlots[0].guestDay}T12:00`, { zone: "UTC" })
+    .setLocale("en-US")
+    .toLocaleString({ month: "short", day: "numeric" });
+  await page.goto(`/${fixture.hostSlug}/${eventSlug}`);
+  await expect(page.getByText("Loading...")).toBeHidden();
+  const guestDate = page.getByRole("button", { name: new RegExp(`^${guestDateLabel},`) });
+  await guestDate.click();
+  await expect(page.getByRole("button", {
+    name: `${restoredSlots[0].guestTime}, 1 spaces remaining`,
+  })).toBeVisible();
+
+  const secondSeat = await request.post("/api/holds", {
+    data: {
+      eventTypeId: managedEvent.id,
+      start: restoredSlots[0].start,
+      timezone: "UTC",
+    },
+  });
+  expect(secondSeat.status()).toBe(201);
+  const fullAvailabilityResponse = await page.request.get(
+    `/api/hosts/${fixture.hostSlug}/events/${eventSlug}/slots?${query}`,
+  );
+  const fullAvailability = await fullAvailabilityResponse.json() as {
+    slots: Array<{ start: string }>;
+    availability: Array<{ start: string; available: boolean; remainingCapacity: number }>;
+  };
+  expect(fullAvailability.availability.find((slot) => slot.start === restoredSlots[0].start))
+    .toMatchObject({ available: false, remainingCapacity: 0 });
+  expect(fullAvailability.slots.some((slot) => slot.start === restoredSlots[0].start)).toBe(false);
+  await page.reload();
+  await expect(page.getByText("Loading...")).toBeHidden();
+  await page.getByRole("button", { name: new RegExp(`^${guestDateLabel},`) }).click();
+  const unavailableTime = page.getByRole("button", {
+    name: `${restoredSlots[0].guestTime}, unavailable`,
+  });
+  await expect(unavailableTime).toBeVisible();
+  await expect(unavailableTime).toBeDisabled();
+
+  await page.goto("/dashboard");
+  await expect(page).toHaveURL(/\/dashboard$/);
   expectingConflict = true;
+  const deleteResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/api/host/event-types/${managedEvent.id}`) &&
+      response.request().method() === "DELETE",
+  );
   await page.once("dialog", (dialog) => dialog.accept());
   await eventCard.getByRole("button", { name: "Delete" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "booking history" })).toBeVisible();
+  expect((await deleteResponsePromise).status()).toBe(409);
+  await expect(page.getByText(/booking history/i)).toBeVisible();
   expectingConflict = false;
   await expect(eventCard).toBeVisible();
 

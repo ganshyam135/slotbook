@@ -19,7 +19,17 @@ async function availableSlots(
   });
   const response = await request.get(`/api/hosts/${hostSlug}/events/${eventSlug}/slots?${query}`);
   expect(response.ok()).toBeTruthy();
-  return (await response.json() as { slots: Array<{ start: string; guestDay: string; guestTime: string }> }).slots;
+  const slots = (await response.json() as {
+    slots: Array<{ start: string; guestDay: string; guestTime: string; remainingCapacity: number }>;
+  }).slots;
+  for (const slot of slots) {
+    expect(slot.remainingCapacity).toBeGreaterThan(0);
+    const keys = Object.keys(slot);
+    for (const sensitiveKey of ["guestName", "guestEmail", "bookingId", "id"]) {
+      expect(keys).not.toContain(sensitiveKey);
+    }
+  }
+  return slots;
 }
 
 async function openSlot(page: Page, slot: { guestDay: string; guestTime: string }) {
@@ -27,11 +37,19 @@ async function openSlot(page: Page, slot: { guestDay: string; guestTime: string 
   const dateLabel = DateTime.fromISO(slot.guestDay, { zone: "UTC" })
     .setLocale("en-US")
     .toLocaleString({ month: "short", day: "numeric" });
-  await page.getByRole("button", { name: dateLabel, exact: true }).click();
-  await page.getByRole("button", { name: slot.guestTime, exact: true }).first().click();
+  await page.getByRole("button", { name: new RegExp(`^${dateLabel},`) }).click();
+  const normalizedTime = slot.guestTime
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "\\s+");
+  const timeButton = page.getByRole("button", {
+    name: new RegExp(`^${normalizedTime},`, "i"),
+  }).first();
+  await expect(timeButton).toBeEnabled();
+  await timeButton.click();
 }
 
 test("guest holds, confirms, manages, reschedules, cancels, and releases capacity", async ({ page, request }) => {
+  test.setTimeout(60_000);
   const fixture = readE2EFixture();
   const browserErrors: string[] = [];
   page.on("pageerror", (error) => browserErrors.push(error.message));
@@ -55,9 +73,11 @@ test("guest holds, confirms, manages, reschedules, cancels, and releases capacit
   await page.goto(`/${fixture.hostSlug}/${fixture.guestEventSlug}`);
   await expect(page.getByRole("heading", { name: "E2E Guest Booking", level: 1 })).toBeVisible();
   await expect(page.getByLabel("Guest time zone")).toHaveValue("UTC");
+  await expect(page.getByLabel("Availability legend")).toContainText("Limited capacity");
   await openSlot(page, originalSlot);
   await page.getByRole("button", { name: "Hold this time for 5 minutes" }).click();
-  await expect(page.getByRole("status")).toContainText(/held for you for\s+\d:\d{2}/);
+  await expect(page.getByRole("status")).toContainText(/Held for you/);
+  await expect(page.getByLabel("Time remaining to confirm")).toHaveText(/\d:\d{2}/);
 
   const email = page.getByLabel("Email address");
   await email.fill("not-an-email");
@@ -92,15 +112,46 @@ test("guest holds, confirms, manages, reschedules, cancels, and releases capacit
   await expect(page.getByText("Manage booking", { exact: true })).toBeVisible();
   await page.waitForLoadState("networkidle");
   await expect(page.getByText("Status: confirmed")).toBeVisible();
-  const rescheduleValue = await page.evaluate((start) => {
-    const target = new Date(start);
-    const localTarget = new Date(target.getTime() - target.getTimezoneOffset() * 60_000);
-    return localTarget.toISOString().slice(0, 16);
-  }, targetSlot.start);
-  const rescheduleInput = page.getByLabel("Reschedule to (your device's local time)");
-  await rescheduleInput.fill(rescheduleValue);
-  await expect(rescheduleInput).toHaveValue(rescheduleValue);
-  await page.getByRole("button", { name: "Reschedule" }).click();
+  const managementToken = new URL(page.url()).pathname.split("/").at(-1);
+  if (!managementToken) throw new Error("Management token was missing from the private link.");
+  const availabilityQuery = new URLSearchParams({
+    from: from.toISOString(),
+    to: to.toISOString(),
+    tz: "UTC",
+  });
+  const publicRescheduleAvailability = await request.get(
+    `/api/hosts/${fixture.hostSlug}/events/${fixture.guestEventSlug}/slots?${availabilityQuery}`,
+  );
+  const publicSlots = (await publicRescheduleAvailability.json() as {
+    slots: Array<{ start: string }>;
+  }).slots;
+  expect(publicSlots.some((slot) => slot.start === originalSlot.start)).toBe(false);
+  const ownRescheduleAvailability = await request.get(
+    `/api/hosts/${fixture.hostSlug}/events/${fixture.guestEventSlug}/slots?${availabilityQuery}`,
+    { headers: { Authorization: `Bearer ${managementToken}` } },
+  );
+  expect(ownRescheduleAvailability.ok()).toBeTruthy();
+  const ownSlots = (await ownRescheduleAvailability.json() as {
+    slots: Array<{ start: string }>;
+  }).slots;
+  expect(ownSlots.some((slot) => slot.start === originalSlot.start)).toBe(true);
+  const invalidManagementAvailability = await request.get(
+    `/api/hosts/${fixture.hostSlug}/events/${fixture.guestEventSlug}/slots?${availabilityQuery}`,
+    { headers: { Authorization: `Bearer ${"0".repeat(64)}` } },
+  );
+  expect(invalidManagementAvailability.status()).toBe(404);
+
+  const targetDateLabel = DateTime.fromISO(`${targetSlot.guestDay}T12:00`, { zone: "UTC" })
+    .setLocale("en-US")
+    .toLocaleString({ month: "short", day: "numeric" });
+  await page.getByRole("button", { name: new RegExp(`^${targetDateLabel},`) }).click();
+  const targetTimeButton = page.getByRole("button", {
+    name: `${targetSlot.guestTime}, available`,
+  });
+  await targetTimeButton.click();
+  await expect(targetTimeButton).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Proposed appointment")).toBeVisible();
+  await page.getByRole("button", { name: "Reschedule appointment" }).click();
   await expect(page.getByRole("status")).toContainText("Booking rescheduled successfully.");
 
   const rescheduled = await e2eDb.booking.findUniqueOrThrow({ where: { id: holdFromBookingUi.id } });

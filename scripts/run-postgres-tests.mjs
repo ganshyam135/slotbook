@@ -1,6 +1,9 @@
-import "dotenv/config";
+import { config } from "dotenv";
 import { execFileSync, spawnSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
+
+config();
+config({ path: ".env.test.local", override: true });
 
 const integrationDatabaseUrl = process.env.E2E_DATABASE_URL;
 if (!integrationDatabaseUrl) {
