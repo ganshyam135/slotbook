@@ -1,34 +1,38 @@
 # AI usage log
 
-AI assistance was used during development and final preparation of Slotbook. Work included repository and assignment review, implementation support, test authoring, diagnosing failures, and documentation updates. The code and test outcomes were reviewed against the current repository; this log does not substitute for the actual test evidence below.
+AI tools assisted with repository review, implementation, tests, debugging, and documentation. This log summarizes the work; it does not replace source history or executed test output.
 
-## Development work assisted by AI
+## Prompt themes and work
 
-- Compared the application with the assignment text available in the workspace history and documented coverage and gaps.
-- Assisted with host dashboard management, event configuration, weekly availability, date overrides, booking lifecycle behavior, guest management, and availability UI.
-- Reviewed PostgreSQL transaction boundaries, capacity enforcement, idempotency, host-wide booking conflicts, timezone conversion, and DST behavior.
-- Helped add and maintain unit, real-PostgreSQL integration, and Playwright cross-browser coverage.
-- Assisted with isolated PostgreSQL Compose/test setup and setup documentation. The database test service uses its own database and schema-specific test runners; no development database reset was used.
-- Diagnosed Playwright failures from error contexts, screenshots, and traces. Fixes addressed normalized time-label selectors, E2E-owned fixture cleanup, logout-origin redirect behavior, cancellation feedback, and test runtime budgets. Booking transaction and locking code was not changed during that failure-fix work.
+Representative user requests included:
 
-## Verification actually run
+- Audit the booking implementation against the take-home assignment, then fix PostgreSQL concurrency and host-wide overlap behavior.
+- Verify migrations, seeding, and booking concurrency against real PostgreSQL without touching the development database.
+- Improve guest availability and rescheduling UI without rewriting the booking engine.
+- Fix observed Playwright E2E failures by inspecting traces, screenshots, and error contexts rather than weakening assertions.
+- Compare final submission readiness with the actual assignment PDF.
 
-Latest recorded verification used the isolated PostgreSQL test database:
+AI-assisted work included host event/availability management, booking lifecycle reliability, host-wide locking, timezone/DST handling, availability/rescheduling UX, isolated test setup, test authoring, and submission documentation.
 
-- `npm run test` — passed twice; each run had 32 passing unit tests and 27 PostgreSQL-only tests skipped by the unit runner.
-- `npm test` — passed; 32 passing unit tests and 27 PostgreSQL-only tests skipped.
-- `npm run test:integration` — passed all 27 integration tests against PostgreSQL.
-- `npm run test:e2e` — passed all 15 Playwright tests across Chromium, Firefox, and WebKit.
+## Where AI was corrected
+
+- Earlier requirements documentation incorrectly described pnpm, sidebar navigation, and shadcn/Lucide usage as requirements and stated that the original PDF was unavailable. Direct inspection of the supplied PDF showed these were not core requirements; the current audit corrects this and identifies the actual report/run deliverables.
+- Initial Playwright failures were not assumed to be application bugs. Traces and screenshots showed a mix of outdated accessible-name matching, fixture cleanup, redirect origin, and cancellation feedback issues. The fixes preserved meaningful assertions and did not alter PostgreSQL locking.
+- A transient cross-browser failure was reported as such; only the full successful rerun was documented as passing.
+- After review of the latest traces, the concurrent retry E2E clients were separated and their responses are consumed before context disposal. The HTTP status and shared-booking assertions remain unchanged; the database booking implementation was not modified.
+
+## Review and verification
+
+The implementation was reviewed against the supplied PDF and checked with unit, real-PostgreSQL integration, and cross-browser E2E suites. PostgreSQL integration and E2E tests use the isolated `slotbook_test` database with separate schemas. Their runners reject fallback to the development database and do not reset/truncate it.
+
+Final verification in this task:
+
+- `npm run test:all` — passed: 32 unit tests passed (27 PostgreSQL-only cases skipped by the unit runner), 27 real-PostgreSQL integration tests passed, and 15 Playwright tests passed across Chromium, Firefox, and WebKit.
 - `npm run lint` — passed.
 - `npx tsc --noEmit` — passed.
 - `npm run build` — passed.
-- `git diff --check` — passed for the final documentation changes.
+- `git diff --check` — passed.
 
-The test database uses separate retained `slotbook_integration` and `slotbook_e2e` schemas. The test runners reject fallback to the development `DATABASE_URL`; test setup and teardown do not reset or truncate the database.
+The first multi-browser run intermittently reported `ECONNRESET` on concurrent idempotency requests although server logs showed both expected responses. The E2E harness now gives the two independent clients separate API request contexts and reads response bodies before disposing the contexts. The same flow passed on all browsers, and the final combined run passed; the booking transaction and its assertions were left intact.
 
-## Corrections and limitations
-
-- Initial browser failures were not treated as passing; traces and screenshots were inspected, fixes were applied, and the complete cross-browser suite was rerun successfully.
-- PostgreSQL integration results are reported separately from the unit suite, where database-dependent tests are expected to be skipped.
-- The original assignment PDF was not available in the workspace. Documentation records that comparison used the assignment-text snapshot referenced by the existing requirements audit.
-- AI assistance did not create a deployment link, invent credentials, or claim email delivery. The demo password remains locally configured through `HOST_PASSWORD`.
+No deployment, real email delivery, optional extension, credential, or test result is claimed without evidence. The demo password remains a local `HOST_PASSWORD` value.

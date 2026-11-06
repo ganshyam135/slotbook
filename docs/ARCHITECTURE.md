@@ -10,6 +10,24 @@
 - `src/lib/db.ts`: the shared Prisma client.
 - `prisma/schema.prisma` and `prisma/migrations`: normalized PostgreSQL schema and initial migration.
 
+## Architecture and booking request flow
+
+```mermaid
+flowchart LR
+  Guest[Guest browser] --> Public[Next.js public booking UI]
+  Host[Host browser] --> Dashboard[Next.js host dashboard]
+  Public --> API[Next.js route handlers]
+  Dashboard --> API
+  API --> Validation[Zod validation and auth]
+  Validation --> Service[Booking and host services]
+  Service -->|Prisma queries and transactions| PG[(PostgreSQL)]
+  Service -->|IANA zone/DST rules| Scheduling[Slot generation]
+  Scheduling --> PG
+  API -->|UTC slots and localized labels| Public
+```
+
+The guest browser requests public slots, then submits a hold to the route handler. The handler validates the request and delegates to the booking service, which locks the shared host calendar and event row, checks capacity/conflicts, and commits the hold and notification record in PostgreSQL. Confirmation, rescheduling, and cancellation use the same database-backed lifecycle; the response gives the guest a private management link.
+
 ## Booking request flow
 
 1. The guest requests a bounded date range from `GET /api/hosts/{host}/events/{slug}/slots`. The server validates the guest IANA timezone, loads host-local weekly hours and date overrides, reads active holds using database time, and returns UTC instants with guest-local labels.

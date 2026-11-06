@@ -1,5 +1,7 @@
 # Slotbook Final Engineering Audit
 
+> **Historical snapshot:** This document records the audit at the revision below and is not the current requirements or verification status. The original assignment PDF has since been reviewed, and current evidence/gaps are in [REQUIREMENTS_AUDIT.md](./REQUIREMENTS_AUDIT.md) and [SUBMISSION_REPORT.md](./SUBMISSION_REPORT.md). The latest combined run passed 27 PostgreSQL integration tests and 15 Playwright tests; do not use the historical test counts below as current results.
+
 **Audit revision:** `66a31631a757e0d26e7926fbbcb1d4339ac69452`
 **Scope:** implementation, database schema/migration, API authorization, scheduling, tests, and submission documents.
 **Remediation update:** host-wide overlap protection was implemented after the audit. No application database was modified; PostgreSQL integration tests were added but could not be run without a dedicated test database URL.

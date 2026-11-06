@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { expect, test } from "@playwright/test";
-import type { APIRequestContext, Page } from "@playwright/test";
+import { expect, request as apiRequest, test } from "@playwright/test";
+import type { APIRequestContext, APIResponse, Page } from "@playwright/test";
 import { DateTime } from "luxon";
 import { readE2EFixture } from "./fixture";
 import { e2eDb } from "./test-db";
@@ -213,18 +213,28 @@ test("guest holds, confirms, manages, reschedules, cancels, and releases capacit
     start: originalSlot.start,
     timezone: "UTC",
   };
-  const retries = await Promise.all([
-    request.post("/api/holds", {
-      headers: { "Idempotency-Key": idempotencyKey },
-      data: idempotentPayload,
-    }),
-    request.post("/api/holds", {
-      headers: { "Idempotency-Key": idempotencyKey },
-      data: idempotentPayload,
-    }),
+  const retryContexts = await Promise.all([
+    apiRequest.newContext({ baseURL: "http://127.0.0.1:3100" }),
+    apiRequest.newContext({ baseURL: "http://127.0.0.1:3100" }),
   ]);
+  let retries: APIResponse[];
+  let retryBodies: Array<{ id: string }>;
+  try {
+    retries = await Promise.all(
+      retryContexts.map((context) =>
+        context.post("/api/holds", {
+          headers: { "Idempotency-Key": idempotencyKey },
+          data: idempotentPayload,
+        }),
+      ),
+    );
+    retryBodies = await Promise.all(
+      retries.map((response) => response.json() as Promise<{ id: string }>),
+    );
+  } finally {
+    await Promise.all(retryContexts.map((context) => context.dispose()));
+  }
   expect(retries.map((response) => response.status()).sort()).toEqual([200, 201]);
-  const retryBodies = await Promise.all(retries.map((response) => response.json() as Promise<{ id: string }>));
   expect(retryBodies[0].id).toBe(retryBodies[1].id);
 
   expect(browserErrors).toEqual([]);

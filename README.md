@@ -26,6 +26,14 @@ Booking writes use PostgreSQL transactions. Operations that change active bookin
 - PostgreSQL 16+ for development, or Docker Desktop with Docker Compose for the isolated test database.
 - Playwright browser binaries for E2E tests: `npx playwright install chromium firefox webkit`.
 
+## 60-second tour
+
+1. Start the app using the setup steps below, then open `http://localhost:3000/demo-host/intro-call` to see the guest booking page.
+2. Select a date and available time, enter guest details, confirm, then follow the private management link to reschedule or cancel.
+3. Open `http://localhost:3000/login` and sign in with `demo@slotbook.app` and the local `HOST_PASSWORD` value to see the host dashboard, event types, availability, overrides, and bookings.
+
+The demo password is deliberately not published. The repository history does not identify whether an external starter template was used; confirm its name or state that no template was used before publishing.
+
 ## Environment configuration
 
 Copy `.env.example` to `.env` and set private values. `DATABASE_URL` is the application/development database. Set `AUTH_SECRET` to a private value of at least 32 characters and set `HOST_PASSWORD` to the password for the seeded demo host (at least 12 characters). The seed uses `HOST_EMAIL` if supplied; otherwise it uses `demo@slotbook.app`.
@@ -77,16 +85,15 @@ npm ci --legacy-peer-deps
 npx prisma generate
 ```
 
-After confirming that `DATABASE_URL` names the intended development database, apply migrations and optionally seed the demo host and event types:
+After confirming that `DATABASE_URL` names the intended development database, run the one-command development bootstrap:
 
 ```powershell
-npm run db:migrate
-npm run seed
+npm run dev:bootstrap
 ```
 
-These commands use `DATABASE_URL`; they are not part of Docker test startup. The seed requires `HOST_PASSWORD` and upserts `demo-host` with `intro-call` and `office-hours`.
+This applies pending migrations, runs the idempotent demo seed, and starts Next.js. It uses `DATABASE_URL` and `HOST_PASSWORD`; it does not start PostgreSQL. Run it only against an intended local development database. The seed upserts `demo-host` with `intro-call` and `office-hours`. For routine starts after setup, use `npm run dev`.
 
-Start the application:
+For subsequent development sessions:
 
 ```powershell
 npm run dev
@@ -122,6 +129,14 @@ Host operations:
 The database notification sink records lifecycle events; it does not deliver email.
 
 ## Tests and verification
+
+```powershell
+npm run test:all
+```
+
+`npm run test:all` runs unit, isolated PostgreSQL integration (including concurrency), and Playwright E2E suites sequentially. Start the isolated Docker test database, create `.env.test.local`, and install Playwright browsers first. The runner keeps integration and E2E data in separate schemas.
+
+Individual commands:
 
 ```powershell
 npm run lint
