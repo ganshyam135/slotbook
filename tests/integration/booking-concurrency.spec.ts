@@ -275,6 +275,17 @@ const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => 
     await confirmHold(moving.id);
     await rescheduleBooking(managementTokenForBooking(moving.id), newStart);
 
+    const notification = await db.notification.findFirstOrThrow({
+      where: { bookingId: moving.id, type: "booking_rescheduled" },
+    });
+    expect(notification.payload).toMatchObject({
+      previousStartUtc: originalStart.toISOString(),
+      newStartUtc: newStart.toISOString(),
+    });
+    expect(await db.notification.count({
+      where: { bookingId: moving.id, type: "booking_rescheduled" },
+    })).toBe(1);
+
     const replacement = await hold(otherEventId, originalStart, "rebook-released-interval");
     expect(replacement.status).toBe("held");
     expect(await db.booking.findUniqueOrThrow({ where: { id: moving.id } }))
@@ -400,6 +411,9 @@ const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => 
       guestName: "Guest After Hold",
       guestEmail: "guest-after-hold@example.test",
     });
+    expect(await db.notification.count({
+      where: { bookingId: held.id, type: "booking_confirmed" },
+    })).toBe(1);
   });
 
   it("releases capacity after cancellation and preserves a booking when a reschedule conflicts", async () => {
@@ -407,6 +421,17 @@ const suite = describe.skipIf(!enabled)("PostgreSQL booking concurrency", () => 
     await confirmHold(first.id);
     const firstToken = managementTokenForBooking(first.id);
     await cancelBooking(firstToken, "test cancellation");
+    const cancellation = await db.notification.findFirstOrThrow({
+      where: { bookingId: first.id, type: "booking_cancelled" },
+    });
+    expect(cancellation.payload).toMatchObject({
+      reason: "test cancellation",
+      startUtc: slot(14, 9).toISOString(),
+    });
+    expect(await db.notification.count({
+      where: { bookingId: first.id, type: "booking_cancelled" },
+    })).toBe(1);
+
     const replacement = await hold(singleEventId, slot(14, 9), "replacement");
     expect(replacement.id).not.toBe(first.id);
 

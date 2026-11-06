@@ -23,7 +23,7 @@ Booking writes use PostgreSQL transactions. Operations that change active bookin
 ## Prerequisites
 
 - Node.js 22 and npm.
-- PostgreSQL 16+ for development, or Docker Desktop with Docker Compose for the isolated test database.
+- Docker Desktop with Docker Compose for the isolated local app/test PostgreSQL database.
 - Playwright browser binaries for E2E tests: `npx playwright install chromium firefox webkit`.
 
 ## 60-second tour
@@ -36,7 +36,7 @@ The demo password is deliberately not published. The repository history does not
 
 ## Environment configuration
 
-Copy `.env.example` to `.env` and set private values. `DATABASE_URL` is the application/development database. Set `AUTH_SECRET` to a private value of at least 32 characters and set `HOST_PASSWORD` to the password for the seeded demo host (at least 12 characters). The seed uses `HOST_EMAIL` if supplied; otherwise it uses `demo@slotbook.app`.
+Copy `.env.example` to `.env` and set private values. Set `AUTH_SECRET` to a private value of at least 32 characters and `HOST_PASSWORD` to the password for the seeded demo host (at least 12 characters). The seed uses `HOST_EMAIL` if supplied; otherwise it uses `demo@slotbook.app`. `DATABASE_URL` remains the development database setting; the one-command local bootstrap deliberately does not use or overwrite it.
 
 ```powershell
 Copy-Item .env.example .env
@@ -44,29 +44,23 @@ Copy-Item .env.example .env
 
 `.env` is local and ignored by Git. Never commit real environment values. The test setup creates a separate ignored `.env.test.local`; it does not overwrite `.env` or `DATABASE_URL`.
 
-## Isolated Docker PostgreSQL for tests
+## One-command local startup and isolated Docker PostgreSQL
 
-The Compose setup starts PostgreSQL only; it does not containerize or start the Next.js application. It creates database `slotbook_test` with a dedicated local test user, maps `127.0.0.1:5434` to container port 5432, and persists data in the uniquely named `slotbook_test_postgres_data` volume. It does not use the development PostgreSQL server on port 5433.
+The Compose setup starts PostgreSQL only; Next.js runs locally. It creates database `slotbook_test` with a dedicated local user, maps `127.0.0.1:5434` to container port 5432, and persists data in the uniquely named `slotbook_test_postgres_data` volume. It does not use the development PostgreSQL server on port 5433.
 
-Generate the ignored test environment file once. The command creates a random local test password and refuses to overwrite an existing file:
+After configuring `.env`, generate the ignored test environment file once. This creates a random local test password and refuses to overwrite an existing file:
 
 ```powershell
 npm run db:test:env
-docker compose --env-file .env.test.local up -d db
 ```
 
-Wait for the health check:
+Start the database, wait for health, apply migrations, seed the demo host, and run the app with:
 
 ```powershell
-for ($attempt = 0; $attempt -lt 30; $attempt++) {
-  $health = docker inspect --format='{{.State.Health.Status}}' slotbook-test-postgres
-  if ($health -eq "healthy") { break }
-  Start-Sleep -Seconds 2
-}
-if ($health -ne "healthy") { throw "Slotbook test PostgreSQL did not become healthy." }
+npm run dev:bootstrap
 ```
 
-The integration and Playwright runners load `.env.test.local`, validate that its database differs from `DATABASE_URL`, and migrate their own retained schemas: `slotbook_integration` and `slotbook_e2e`. Do not seed the test database; the suites create their own fixtures.
+This command uses the isolated `slotbook_test` database's `public` schema for the local demo. It derives its connection from `E2E_DATABASE_URL` in `.env.test.local`, checks that the target is exactly the local test database and differs from `DATABASE_URL`, and leaves both environment files unchanged. The integration and Playwright runners use separate schemas (`slotbook_integration` and `slotbook_e2e`) and create their own fixtures.
 
 Stop the service without deleting its data:
 
@@ -76,7 +70,7 @@ docker compose --env-file .env.test.local stop db
 
 Do not use `down -v` if you want to preserve the named volume.
 
-## Migrations, seed, and development
+## Dependencies and routine development
 
 Install dependencies and generate Prisma Client:
 
@@ -85,13 +79,7 @@ npm ci --legacy-peer-deps
 npx prisma generate
 ```
 
-After confirming that `DATABASE_URL` names the intended development database, run the one-command development bootstrap:
-
-```powershell
-npm run dev:bootstrap
-```
-
-This applies pending migrations, runs the idempotent demo seed, and starts Next.js. It uses `DATABASE_URL` and `HOST_PASSWORD`; it does not start PostgreSQL. Run it only against an intended local development database. The seed upserts `demo-host` with `intro-call` and `office-hours`. For routine starts after setup, use `npm run dev`.
+The one-command bootstrap runs migrations and the idempotent demo seed before starting Next.js. The seed upserts `demo-host` with `intro-call` and `office-hours`. Once the database is running and migrated, `npm run dev` can start Next.js directly; it uses `DATABASE_URL` from `.env`, so use it only when that URL targets the intended database.
 
 For subsequent development sessions:
 

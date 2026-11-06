@@ -9,7 +9,7 @@ This audit compares the repository with the supplied five-page **Slotbook — Ta
 - **Partially implemented** — only part of the stated requirement is present.
 - **Missing** — not present.
 
-The checks below concern the current local repository. No public repository or production deployment is claimed.
+The checks below concern the current repository. The public GitHub repository is [https://github.com/ganshyam135/slotbook](https://github.com/ganshyam135/slotbook); no production deployment is claimed.
 
 ## Core feature and technical requirements
 
@@ -24,13 +24,13 @@ The checks below concern the current local repository. No public repository or p
 | Hold a selected slot for five minutes while entering guest details | Implemented and verified | Hold and confirm API routes; PostgreSQL sets expiry from database time. Integration and E2E tests cover details, expiry, and late confirmation. |
 | Confirmation returns private link to view, reschedule, and cancel | Implemented and verified | Booking management page and token-protected routes; guest lifecycle E2E covers management, reschedule, and cancellation. |
 | Lifecycle: held → confirmed → cancelled or held → expired; only active holds and confirmed bookings consume capacity | Implemented and verified | `src/lib/booking-service.ts`; real PostgreSQL lifecycle and capacity tests cover expiry and cancellation release. |
-| Confirmation, reschedule, and cancellation notification events | Implemented but not fully verified | Transactional `Notification` records are persisted; integration tests verify notification writes, but do not independently assert every event type. No external email is required or claimed. |
+| Confirmation, reschedule, and cancellation notification events | Implemented and verified | PostgreSQL integration tests assert the event types and relevant payloads for confirmation, rescheduling, and cancellation. No external email is required or claimed. |
 | Documented minimum API | Implemented and verified | Endpoint overview and payload behavior are documented in `README.md`. |
 | TypeScript end to end | Implemented and verified | Next.js/React source, Prisma application, and API are TypeScript; `npx tsc --noEmit` and production build pass. |
 | PostgreSQL is the correctness source; no Redis/external lock service | Implemented and verified | Prisma PostgreSQL schema, SQL migration, and PostgreSQL transactions/row locks in `src/lib/booking-service.ts`; concurrency integration tests use real PostgreSQL. |
 | Source, migrations, and seed script | Implemented and verified | `src/`, `prisma/migrations/`, and `src/lib/seed.ts` are tracked. |
 | Demo host has two event types | Implemented and verified | Seed upserts `demo-host`, `intro-call`, and `office-hours`; the seed requires locally supplied `HOST_PASSWORD`. |
-| One-command app run applies migrations, seeds, and starts the app | Partially implemented | `npm run dev:bootstrap` now applies pending migrations, seeds, and starts Next.js against configured `DATABASE_URL`. PostgreSQL must already be running; `docker-compose.yml` intentionally remains database-only and does not itself start the app. |
+| One-command app run applies migrations, seeds, and starts the app | Implemented | `npm run dev:bootstrap` starts the Compose PostgreSQL service, waits for health, migrates and seeds the app in the `public` schema of isolated `slotbook_test`, then starts Next.js. The script derives its connection from `.env.test.local` and refuses to target the development database. |
 | One-command tests include real-PostgreSQL concurrency tests | Implemented and verified | `npm run test:all` runs unit, PostgreSQL integration, and E2E suites sequentially. The integration stage runs `tests/integration/booking-concurrency.spec.ts` against the isolated PostgreSQL schema. |
 
 ## Reliability evidence
@@ -49,7 +49,7 @@ The checks below concern the current local repository. No public repository or p
 
 | Requirement | Status | Evidence and remaining gap |
 |---|---|---|
-| Public GitHub repository and report linking to it | Missing until submission | Repository is local; no public GitHub URL is claimed. Add the real URL to the final report after creating the repository. |
+| Public GitHub repository and report linking to it | Implemented | Public repository: [https://github.com/ganshyam135/slotbook](https://github.com/ganshyam135/slotbook); the same URL is in `docs/SUBMISSION_REPORT.md`. |
 | 6–12 page PDF report or 8–15 slide deck | Missing | Current `docs/SUBMISSION_REPORT.md` is a Markdown source, not a PDF/deck. Export a reviewed report after inserting the real repository link. |
 | Architecture diagram and booking request flow | Partially implemented | The flow is documented in `docs/ARCHITECTURE.md`; a Mermaid architecture diagram is included there, but the final PDF/deck must include the diagram. |
 | Data model, key decisions with alternatives, reliability cases/tests, DST example | Implemented in report source | `docs/SUBMISSION_REPORT.md` contains the data model, decision trade-offs, failure/test mapping, and DST example; it must be included in the exported PDF/deck. |
@@ -76,11 +76,11 @@ These are optional in the PDF, not core requirements:
 
 ## Database and test isolation
 
-- `docker-compose.yml` provides PostgreSQL 16 on host port 5434 for test use. It does not modify the existing development database on port 5433.
+- `docker-compose.yml` provides PostgreSQL 16 on host port 5434 for the local demo and tests. The app uses `public`; integration and E2E use their own schemas. It does not use the development database on port 5433.
 - `npm run test:integration` uses `slotbook_integration`; `npm run test:e2e` uses `slotbook_e2e`.
 - The runners load `.env.test.local` with test-specific precedence and reject using the development database URL.
 - Tests clean only their owned records; they do not reset or truncate the database.
 
 ## Submission readiness
 
-The core scheduling requirements are implemented and covered by unit, real-PostgreSQL integration, and Playwright tests. Before sending the submission, create the public GitHub repository, preserve commit history, export the Markdown report to the required PDF/deck format, insert the real repository URL, and decide whether the optional rate-limit/CI/deployment work is in scope. Do not claim a live deployment or optional feature that has not been built.
+The core scheduling requirements are implemented and covered by unit, real-PostgreSQL integration, and Playwright tests. Before sending the submission, preserve the public repository's commit history, export the Markdown report to the required PDF/deck format, and confirm whether a starter template was used. Do not claim a live deployment or optional feature that has not been built.

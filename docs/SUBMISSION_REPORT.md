@@ -1,10 +1,10 @@
 # Slotbook submission report
 
-> Submission status: this is the Markdown source for the required report. It must be exported as a 6–12 page PDF or an 8–15 slide deck after the public repository URL is available.
+> Submission status: this is the Markdown source for the required report. Export it as a 6–12 page PDF or an 8–15 slide deck before submission.
 
 ## 1. Links and project overview
 
-- Public GitHub repository: pending creation; add the actual URL before sending this report.
+- Public GitHub repository: [https://github.com/ganshyam135/slotbook](https://github.com/ganshyam135/slotbook)
 - Live URL: not deployed.
 
 Slotbook is a host-and-guest appointment scheduling application. Hosts configure event types, weekly availability, date overrides, profile details, and review/cancel upcoming bookings. Guests browse public availability, create and confirm a temporary hold, and manage confirmed appointments through a private link.
@@ -81,7 +81,7 @@ The documented API covers public slots; hold creation with `Idempotency-Key`; ho
 | Check | Latest actual result |
 |---|---|
 | Unit tests | 32 passed; PostgreSQL-only tests are skipped by the unit runner. |
-| PostgreSQL integration | 27 passed against isolated schema `slotbook_integration`. |
+| PostgreSQL integration | 27 passed against isolated schema `slotbook_integration`, including notification event assertions for confirmation, rescheduling, and cancellation. |
 | Playwright E2E | 15 passed across Chromium, Firefox, and WebKit (five per project). |
 | Combined `npm run test:all` | Passed: unit, all 27 PostgreSQL integration tests, and all 15 Playwright tests. |
 | ESLint | Passed. |
@@ -106,8 +106,8 @@ The earlier audit incorrectly treated pnpm, dashboard sidebar navigation, and sh
 
 ## 10. Known gaps and next steps
 
-1. Create the public GitHub repository and preserve the existing incremental commit history; then add its actual link above.
+1. Preserve the existing incremental commit history when submitting.
 2. Export this reviewed report to the assignment's 6–12 page PDF or 8–15 slide format, including the architecture diagram and repository link.
 3. Confirm whether an external starter template was used and name it in `README.md`, or explicitly state that none was used.
-4. `docker compose up` starts only the isolated PostgreSQL test service, not the Next.js application. `npm run dev:bootstrap` runs migrations, seeds, and starts the app against an already-running database. Keep this explicit database-only setup unless the submission owner chooses a different deployment/run model.
+4. `npm run dev:bootstrap` starts the database through Compose, waits for health, migrates and seeds the app in `slotbook_test`'s `public` schema, and starts Next.js; integration and E2E schemas remain separate.
 5. No live deployment, CI workflow, abuse rate limits, email delivery, or load-test measurements are claimed. Add them only if desired; they are not core scheduling requirements.
